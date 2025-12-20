@@ -5,11 +5,9 @@ import { PatientLayout } from '@/components/layout/PatientLayout';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useAuth } from '@/context/AuthContext';
-import { sessionService } from '@/lib/services/sessionService';
-import { protocolService } from '@/lib/services/protocolService';
-import { messageService } from '@/lib/services/messageService';
-import { assignmentService } from '@/lib/services/assignmentService';
-import { useMemo, useEffect } from 'react';
+import { useSession } from '@/context/SessionContext';
+import { useProtocol } from '@/context/ProtocolContext';
+import { useMemo } from 'react';
 import type { Session, Protocol, Message, Assignment } from '@/types/api';
 
 function CircularProgress({ value, size = 120 }: { value: number; size?: number }) {
@@ -54,105 +52,39 @@ export default function PatientHome() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { sessions: allSessions, updateSession } = useSession();
+  const { protocols: allProtocols } = useProtocol();
 
-  // Note: Authentication is handled at the routing level
-  // No need to redirect here as it causes race conditions with localStorage
-
-  // Fetch all sessions for this patient
-  // Backend automatically filters by current user (patient)
-  // Don't use date filters - we want all sessions to filter in frontend
-  const { data: sessionsData, isLoading: sessionsLoading, error: sessionsError } = useQuery({
-    queryKey: ['sessions', 'patient', user?.id],
-    queryFn: async () => {
-      console.log('[DEBUG PatientHome] Fetching sessions for user:', user?.id);
-      const result = await sessionService.getAll({}); // No date filters - get all sessions
-      console.log('[DEBUG PatientHome] Sessions response:', result);
-      console.log('[DEBUG PatientHome] Sessions data:', result?.data);
-      return result;
-    },
-    enabled: !!user?.id,
-  });
-
-  // Debug logging
-  console.log('[DEBUG PatientHome] User:', user);
-  console.log('[DEBUG PatientHome] Sessions query enabled:', !!user?.id);
-  console.log('[DEBUG PatientHome] Sessions loading:', sessionsLoading);
-  console.log('[DEBUG PatientHome] Sessions error:', sessionsError);
-  console.log('[DEBUG PatientHome] Sessions data:', sessionsData);
-
-  // Fetch assigned protocols for this patient
-  const { data: assignmentsData, isLoading: assignmentsLoading } = useQuery({
-    queryKey: ['assignments', 'patient', user?.id],
-    queryFn: () => assignmentService.getAll({ status: 'active' }),
-    enabled: !!user?.id,
-  });
-
-  const assignments: Assignment[] = assignmentsData || [];
-
-  // Extract sessions data early for use in protocol query
-  const sessions: Session[] = sessionsData?.data || [];
-
-  // More debug logging
-  console.log('[DEBUG PatientHome] Sessions array length:', sessions.length);
-  if (sessions.length > 0) {
-    console.log('[DEBUG PatientHome] First session:', sessions[0]);
-  }
-
-  // Fetch protocol details for ALL protocols referenced in sessions (not just assigned ones)
-  // This ensures we can display protocol names for all sessions
-  const { data: protocolsData } = useQuery({
-    queryKey: ['protocols', 'sessions', sessions.map(s => s.protocol_id).join(',')],
-    queryFn: async () => {
-      if (!sessions.length) return [];
-      // Get unique protocol IDs from sessions
-      const protocolIds = [...new Set(sessions.map(s => s.protocol_id))];
-      // Fetch each protocol by ID
-      const protocolPromises = protocolIds.map(protocolId =>
-        protocolService.getById(protocolId).catch(() => null)
-      );
-      const protocols = (await Promise.all(protocolPromises)).filter((p): p is Protocol => p !== null);
-      return protocols;
-    },
-    enabled: sessions.length > 0,
-  });
-
-  // Fetch recent messages (optional - don't block if it fails)
-  const { data: messagesData } = useQuery({
-    queryKey: ['messages', 'patient-recent'],
-    queryFn: () => messageService.getAll({ limit: 10 }),
-    retry: false, // Don't retry on failure
-    refetchOnWindowFocus: false, // Don't refetch on window focus
-  });
-
-  const protocols: Protocol[] = protocolsData || [];
-  const messages: Message[] = messagesData?.data || [];
+  // Filter sessions for this patient
+  const sessions = useMemo(() => {
+    return allSessions.filter(s => s.patient_id === user?.id);
+  }, [allSessions, user?.id]);
 
   // Get protocol map for quick lookup
   const protocolMap = useMemo(() => {
     const map = new Map<string, Protocol>();
-    protocols.forEach((p) => map.set(p.id, p));
+    // We can access all protocols in context because they are public/shared in this dummy mode
+    allProtocols.forEach((p) => map.set(p.id, p));
     return map;
-  }, [protocols]);
+  }, [allProtocols]);
+
+  // Derived data
+  const protocols = allProtocols;
+  const sessionsLoading = false; // Sync data
+  const assignments: Assignment[] = []; // No assignment context yet, ignore for now or infer
+  const messages: Message[] = []; // No message context yet
 
   // Find today's session (scheduled for today or in progress)
   // Priority: in_progress > scheduled (for today) > completed (today)
   const todaysSession = useMemo(() => {
-    if (!sessions.length) {
-      console.log('[DEBUG PatientHome] No sessions found');
-      return null;
-    }
+    if (!sessions.length) return null;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
-
-    console.log('[DEBUG PatientHome] Looking for today\'s session. Today:', todayStr);
-    console.log('[DEBUG PatientHome] All sessions:', sessions.map(s => ({
-      id: s.id,
-      scheduled_date: s.scheduled_date,
-      started_at: s.started_at,
-      status: s.status
-    })));
+    // Correctly get local date string YYYY-MM-DD
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
 
     // Find sessions scheduled for today or in progress
     const todaysSessions = sessions
@@ -160,21 +92,20 @@ export default function PatientHome() {
         // Primary check: scheduled_date is today
         if (s.scheduled_date) {
           const scheduledDateStr = s.scheduled_date.split('T')[0]; // handles both date and datetime
-          console.log('[DEBUG PatientHome] Session', s.id, 'scheduled_date:', scheduledDateStr, 'matches today?', scheduledDateStr === todayStr);
           if (scheduledDateStr === todayStr) {
-            const matches = s.status === 'scheduled' || s.status === 'in_progress' || s.status === 'completed';
-            console.log('[DEBUG PatientHome] Session', s.id, 'matches today and status check:', matches);
-            return matches;
+            return s.status === 'scheduled' || s.status === 'in_progress' || s.status === 'completed';
           }
         }
 
         // Fallback: started today (for in_progress or completed sessions without a scheduled_date)
         if (s.started_at) {
-          const startedDate = new Date(s.started_at);
-          startedDate.setHours(0, 0, 0, 0);
-          const matches = startedDate.getTime() === today.getTime() && (s.status === 'in_progress' || s.status === 'completed');
-          console.log('[DEBUG PatientHome] Session', s.id, 'started today?', matches);
-          return matches;
+          const started = new Date(s.started_at);
+          const startedY = started.getFullYear();
+          const startedM = String(started.getMonth() + 1).padStart(2, '0');
+          const startedD = String(started.getDate()).padStart(2, '0');
+          const startedStr = `${startedY}-${startedM}-${startedD}`;
+
+          return startedStr === todayStr && (s.status === 'in_progress' || s.status === 'completed');
         }
 
         return false;
@@ -189,13 +120,6 @@ export default function PatientHome() {
         const bDate = b.scheduled_date ? b.scheduled_date.split('T')[0] : (b.started_at ? b.started_at.split('T')[0] : '');
         return aDate.localeCompare(bDate);
       });
-
-    console.log('[DEBUG PatientHome] Today\'s sessions found:', todaysSessions.length);
-    if (todaysSessions.length > 0) {
-      console.log('[DEBUG PatientHome] Selected today\'s session:', todaysSessions[0].id, todaysSessions[0].status);
-    } else {
-      console.log('[DEBUG PatientHome] No sessions match today\'s date');
-    }
 
     return todaysSessions[0] || null;
   }, [sessions]);
@@ -258,19 +182,15 @@ export default function PatientHome() {
     return count;
   }, [sessions]);
 
-  // Get active protocols from assignments
+  // Get active protocols from unique protocolIds in sessions
   const activeProtocols = useMemo(() => {
-    if (!assignments.length || !protocols.length) return [];
+    if (!sessions.length || !protocols.length) return [];
 
-    // Get protocols that are assigned and active
-    const activeAssignmentIds = assignments
-      .filter(a => a.status === 'active')
-      .map(a => a.protocol_id);
-
+    const activeIds = [...new Set(sessions.map(s => s.protocol_id))];
     return protocols
-      .filter(p => activeAssignmentIds.includes(p.id))
+      .filter(p => activeIds.includes(p.id))
       .slice(0, 3);
-  }, [assignments, protocols]);
+  }, [sessions, protocols]);
 
   // Get upcoming sessions (next 4) - includes scheduled and in_progress
   // Use scheduled_date if available, otherwise started_at
@@ -322,28 +242,27 @@ export default function PatientHome() {
       // If session is scheduled, start it first
       if (target.status === 'scheduled') {
         try {
-          await sessionService.start(target.id);
-          // Invalidate queries to refresh session data
-          queryClient.invalidateQueries({ queryKey: ['sessions'] });
-          // After starting, navigate to active session
+          // Use context update instead of service
+          updateSession(target.id, {
+            status: 'in_progress',
+            started_at: new Date().toISOString()
+          });
+
           navigate(
-            `/patient/session/active?assignment_id=${target.assignment_id}&protocol_id=${target.protocol_id}&session_id=${target.id}`
+            `/patient/session/active?protocol_id=${target.protocol_id}&session_id=${target.id}`
           );
         } catch (error) {
           console.error('Failed to start session:', error);
-          // Still navigate even if start fails
           navigate(
-            `/patient/session/active?assignment_id=${target.assignment_id}&protocol_id=${target.protocol_id}&session_id=${target.id}`
+            `/patient/session/active?protocol_id=${target.protocol_id}&session_id=${target.id}`
           );
         }
       } else {
-        // Already in progress or completed, just navigate
         navigate(
-          `/patient/session/active?assignment_id=${target.assignment_id}&protocol_id=${target.protocol_id}&session_id=${target.id}`
+          `/patient/session/active?protocol_id=${target.protocol_id}&session_id=${target.id}`
         );
       }
     } else {
-      // If no session to start, navigate to sessions page
       navigate('/patient/sessions');
     }
   };
@@ -395,7 +314,9 @@ export default function PatientHome() {
   }
 
   const protocol = todaysSession ? protocolMap.get(todaysSession.protocol_id) : null;
-  const protocolTitle = protocol?.title || 'No session scheduled';
+  const protocolTitle = todaysSession
+    ? (protocol?.title || 'Unknown Protocol')
+    : 'No session scheduled';
 
   return (
     <PatientLayout title={`Hello, ${user?.email?.split('@')[0] || 'Patient'}`} subtitle="Here's your rehab plan for today">
@@ -407,10 +328,10 @@ export default function PatientHome() {
             <h3 className="text-base md:text-lg font-semibold text-foreground">Today's Session</h3>
             <span
               className={`pill text-[10px] md:text-xs ${todaysSession
-                  ? todaysSession.status === 'completed'
-                    ? 'pill-success'
-                    : 'pill-primary'
-                  : 'pill-neutral'
+                ? todaysSession.status === 'completed'
+                  ? 'pill-success'
+                  : 'pill-primary'
+                : 'pill-neutral'
                 }`}
             >
               {todaysSession ? (todaysSession.status === 'completed' ? 'Completed' : 'Due') : 'None'}
@@ -545,12 +466,12 @@ export default function PatientHome() {
                     </div>
                     <span
                       className={`pill text-[10px] md:text-xs ml-2 ${session.status === 'completed'
-                          ? 'pill-success'
-                          : session.status === 'in_progress'
-                            ? 'pill-primary'
-                            : session.status === 'scheduled'
-                              ? 'pill-neutral'
-                              : 'pill-warning'
+                        ? 'pill-success'
+                        : session.status === 'in_progress'
+                          ? 'pill-primary'
+                          : session.status === 'scheduled'
+                            ? 'pill-neutral'
+                            : 'pill-warning'
                         }`}
                     >
                       {session.status === 'completed'

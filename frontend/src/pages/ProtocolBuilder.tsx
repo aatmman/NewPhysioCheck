@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useProtocol, Exercise, ProtocolExercise } from '@/context/ProtocolContext';
+import { useProtocol, Exercise } from '@/context/ProtocolContext';
 import { Search, GripVertical, Trash2, Loader2, Save, UserPlus, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 
-// UI-specific type extending the Context type with Exercise details for display
-interface UIProtocolExercise extends ProtocolExercise {
-  // We need these for display in the UI list
-  name: string;
-  description?: string;
-  image_url?: string;
-  joint?: string;
-  difficulty?: string;
-  position?: string;
+// UI-specific type combining Exercise details with ProtocolStep configuration
+interface UIProtocolExercise extends Exercise {
+  // Configurable fields for the protocol step
+  step_id: string; // Temporary ID for UI list management
+  sets: number;
+  reps: number;
+  duration_seconds: number | null;
+  side: 'left' | 'right' | 'both';
+  order_index: number;
 }
 
 const ProtocolBuilder = () => {
@@ -61,21 +61,20 @@ const ProtocolBuilder = () => {
     await new Promise(resolve => setTimeout(resolve, 600));
 
     try {
-      // Map UI exercises to context format
+      // Map UI exercises to context format (ProtocolStep)
       const protocolInput = builderExercises.map(ex => ({
-        exerciseId: ex.exerciseId,
-        exerciseKey: ex.exerciseKey,
+        exercise_id: ex.id,
         sets: ex.sets,
         reps: ex.reps,
         duration_seconds: ex.duration_seconds,
         side: ex.side,
         order_index: ex.order_index,
-        name: ex.name // Preserve name for context if needed
+        notes: null
       }));
 
       createProtocol({
-        name: protocolName,
-        exercises: protocolInput
+        title: protocolName,
+        steps: protocolInput
       });
 
       toast({
@@ -112,20 +111,13 @@ const ProtocolBuilder = () => {
 
   const addToProtocol = (exercise: Exercise) => {
     // Check if already added
-    if (builderExercises.find(e => e.exerciseId === exercise.id)) return;
+    if (builderExercises.find(e => e.id === exercise.id)) return;
 
     setBuilderExercises([
       ...builderExercises,
       {
-        id: crypto.randomUUID(), // Temp UI ID
-        exerciseId: exercise.id,
-        exerciseKey: exercise.key,
-        name: exercise.name,
-        description: exercise.description,
-        image_url: exercise.image_url,
-        joint: exercise.joint,
-        difficulty: exercise.difficulty,
-        position: exercise.position,
+        ...exercise,
+        step_id: crypto.randomUUID(), // Temp UI ID
         sets: 3,
         reps: 10,
         duration_seconds: null,
@@ -135,12 +127,12 @@ const ProtocolBuilder = () => {
     ]);
   };
 
-  const removeFromProtocol = (id: string) => {
-    setBuilderExercises(builderExercises.filter((e) => e.id !== id).map((ex, idx) => ({ ...ex, order_index: idx })));
+  const removeFromProtocol = (stepId: string) => {
+    setBuilderExercises(builderExercises.filter((e) => e.step_id !== stepId).map((ex, idx) => ({ ...ex, order_index: idx })));
   };
 
-  const updateExercise = (id: string, updates: Partial<UIProtocolExercise>) => {
-    setBuilderExercises(builderExercises.map((ex) => (ex.id === id ? { ...ex, ...updates } : ex)));
+  const updateExercise = (stepId: string, updates: Partial<UIProtocolExercise>) => {
+    setBuilderExercises(builderExercises.map((ex) => (ex.step_id === stepId ? { ...ex, ...updates } : ex)));
   };
 
   // DUMMY PATIENTS for dropdown
@@ -184,7 +176,7 @@ const ProtocolBuilder = () => {
                   )}
                   <button
                     onClick={() => addToProtocol(exercise)}
-                    disabled={!!builderExercises.find((e) => e.exerciseId === exercise.id)}
+                    disabled={!!builderExercises.find((e) => e.id === exercise.id)}
                     className="absolute top-3 right-3 w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Plus className="w-5 h-5" />
@@ -228,12 +220,12 @@ const ProtocolBuilder = () => {
                   <p className="text-sm text-muted-foreground text-center py-4">No exercises added yet</p>
                 ) : (
                   builderExercises.map((exercise) => (
-                    <div key={exercise.id} className="protocol-item">
+                    <div key={exercise.step_id} className="protocol-item">
                       <div className="flex items-center gap-2 mb-3">
                         <GripVertical className="w-4 h-4 text-muted-foreground cursor-grab" />
                         <span className="font-medium text-foreground flex-1 text-sm">{exercise.name}</span>
                         <button
-                          onClick={() => removeFromProtocol(exercise.id)}
+                          onClick={() => removeFromProtocol(exercise.step_id)}
                           className="p-1 hover:bg-card rounded transition-colors"
                         >
                           <Trash2 className="w-4 h-4 text-muted-foreground" />
@@ -246,7 +238,7 @@ const ProtocolBuilder = () => {
                             type="number"
                             min="1"
                             value={exercise.sets}
-                            onChange={(e) => updateExercise(exercise.id, { sets: parseInt(e.target.value) || 0 })}
+                            onChange={(e) => updateExercise(exercise.step_id, { sets: parseInt(e.target.value) || 0 })}
                             className="h-8 text-xs"
                           />
                         </div>
@@ -256,7 +248,7 @@ const ProtocolBuilder = () => {
                             type="number"
                             min="1"
                             value={exercise.reps}
-                            onChange={(e) => updateExercise(exercise.id, { reps: parseInt(e.target.value) || 0 })}
+                            onChange={(e) => updateExercise(exercise.step_id, { reps: parseInt(e.target.value) || 0 })}
                             className="h-8 text-xs"
                           />
                         </div>
@@ -266,7 +258,7 @@ const ProtocolBuilder = () => {
                         <select
                           value={exercise.side || 'both'}
                           onChange={(e) =>
-                            updateExercise(exercise.id, { side: e.target.value as 'left' | 'right' | 'both' })
+                            updateExercise(exercise.step_id, { side: e.target.value as 'left' | 'right' | 'both' })
                           }
                           className="w-full h-8 text-xs bg-card border border-border rounded px-2"
                         >

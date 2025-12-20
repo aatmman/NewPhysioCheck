@@ -1,18 +1,16 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Play, Pause, SkipBack, SkipForward, X, CheckCircle, AlertCircle, Clock, Target, Activity, Loader2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, X, CheckCircle, AlertCircle, Clock, Target, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/context/AuthContext';
-import { sessionService } from '@/lib/services/sessionService';
-import { protocolService } from '@/lib/services/protocolService';
-import { exerciseService } from '@/lib/services/exerciseService';
+import { useSession } from '@/context/SessionContext';
+import { useProtocol } from '@/context/ProtocolContext';
 import { useToast } from '@/hooks/use-toast';
-import type { Protocol, Session, SessionRepCreate, SessionComplete, Exercise } from '@/types/api';
+import type { Protocol, Session, Exercise } from '@/types/api';
 import { createPoseClient, PoseClient } from '@/lib/vision/poseClient';
 import type { PoseLandmark, ExerciseType, SessionRepPayload } from '@/lib/vision/types';
 import {
@@ -20,40 +18,45 @@ import {
   createSlrRepDetector,
   createSquatRepDetector,
   type RepDetector,
+  type RepOutput
 } from '@/lib/vision/repDetectors';
-import { repEventToSessionRep } from '@/lib/vision/sessionReps';
+
+// --- DATA SHAPES FOR BACKEND INTEGRATION ---
+
+interface SessionResult {
+  sessionId: string;
+  startedAt: string;
+  completedAt: string;
+  exercises: ExerciseResult[];
+}
+
+interface ExerciseResult {
+  exerciseKey: string; // 'squat', 'slr', etc.
+  totalReps: number;
+  avgMaxAngle: number;
+  avgFormScore: number;
+}
 
 /**
  * PatientSessionActive Component
- * 
- * Handles active exercise session with pose detection integration point.
- * 
- * Session Flow:
- * 1. On mount or "Start Session": POST /api/v1/sessions (creates session_id)
- * 2. During session: Track exercises, reps (currently mock, future: MediaPipe)
- * 3. On "Save & Finish": POST /api/v1/sessions/{id}/complete with:
- *    - Pain scores
- *    - Notes
- *    - Reps array (currently mock, replace with MediaPipe-derived data)
- * 
- * MediaPipe Integration Point:
- * The generateMockReps() function should be replaced with MediaPipe pose detection.
- * All MediaPipe logic should live in this component to keep it isolated.
  */
 export default function PatientSessionActive() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { updateSession } = useSession();
+  const { protocols, exercises: allExercises } = useProtocol();
 
-  // Get assignment_id and protocol_id from URL params
-  const assignmentId = searchParams.get('assignment_id');
-  const protocolId = searchParams.get('protocol_id');
+  // Get session_id and protocol_id from URL params
+  const sessionIdParam = searchParams.get('session_id');
+  const protocolIdParam = searchParams.get('protocol_id');
 
-  // Session state
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionStarted, setSessionStarted] = useState(false);
+  // Initialize state
+  const [sessionId, setSessionId] = useState<string | null>(sessionIdParam);
+  // Logically, we start session when we land here
+  const [startedAt] = useState<string>(new Date().toISOString());
+
   const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
@@ -62,10 +65,16 @@ export default function PatientSessionActive() {
   const [sessionNotes, setSessionNotes] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [poseReady, setPoseReady] = useState(false);
+
+  // Real-time Feedback State
+  const [liveFeedback, setLiveFeedback] = useState('Get ready...');
+  const [currentAngle, setCurrentAngle] = useState<number | null>(null);
+
   const [liveReps, setLiveReps] = useState<SessionRepPayload[]>([]);
   const [lastRep, setLastRep] = useState<SessionRepPayload | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Vision: webcam + pose client + canvas
+  // Vision refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -74,200 +83,96 @@ export default function PatientSessionActive() {
   const repDetectorRef = useRef<RepDetector | null>(null);
   const isPausedRef = useRef<boolean>(false);
 
-  // Track reps completed per exercise (mock data for now)
+  // To detect NEW reps in the loop
+  const lastRepCountRef = useRef<number>(0);
+
+  // Track reps completed per exercise
   const [exerciseRepsCompleted, setExerciseRepsCompleted] = useState<Record<string, number>>({});
 
-  // Fetch protocol to get exercises
-  const { data: protocolData, isLoading: protocolLoading } = useQuery({
-    queryKey: ['protocol', protocolId],
-    queryFn: () => protocolService.getById(protocolId!),
-    enabled: !!protocolId,
-  });
+  // Find protocol
+  const protocol = protocols.find(p => p.id === protocolIdParam) || null;
 
-  const protocol: Protocol | null = protocolData || null;
-  const exercises = protocol?.steps || [];
-  const currentExercise = exercises[currentExerciseIndex];
-  const totalExercises = exercises.length;
-  const currentExerciseRef = useRef<typeof currentExercise>(currentExercise);
+  // Use protocol steps
+  const steps = protocol?.steps || [];
+  const currentStep = steps[currentExerciseIndex];
+  const totalExercises = steps.length;
+  // Ref for access in animation loop
+  const currentStepRef = useRef<typeof currentStep>(currentStep);
 
-  // Fetch exercise details for all exercises in protocol to get names
-  const exerciseIds = exercises.map(step => step.exercise_id);
-  const { data: exercisesData } = useQuery({
-    queryKey: ['exercises', 'protocol', exerciseIds.join(',')],
-    queryFn: async () => {
-      if (!exerciseIds.length) return [];
-      const exercisePromises = exerciseIds.map(id =>
-        exerciseService.getById(id).catch(() => null)
-      );
-      return (await Promise.all(exercisePromises)).filter((e): e is Exercise => e !== null);
-    },
-    enabled: exerciseIds.length > 0,
-  });
-
-  // Create exercise map for quick lookup
+  // Map exercises for easy lookup
   const exerciseMap = useMemo(() => {
     const map = new Map<string, Exercise>();
-    (exercisesData || []).forEach(ex => map.set(ex.id, ex));
+    allExercises.forEach(ex => map.set(ex.id, ex));
     return map;
-  }, [exercisesData]);
+  }, [allExercises]);
 
-  // Calculate progress
-  const currentReps = currentExercise ? (exerciseRepsCompleted[currentExercise.exercise_id] || 0) : 0;
-  const targetReps = currentExercise?.reps || 1;
-  const overallProgress = totalExercises > 0
-    ? ((currentExerciseIndex + (currentReps / targetReps)) / totalExercises) * 100
-    : 0;
+  const getCurrentExerciseName = () => {
+    if (!currentStep) return '';
+    return exerciseMap.get(currentStep.exercise_id)?.name || 'Unknown Exercise';
+  };
 
-  const accuracyAvg = liveReps.length
-    ? Math.round(
-      liveReps
-        .map((r) => r.accuracyScore ?? 0)
-        .reduce((a, b) => a + b, 0) / liveReps.length,
-    )
-    : null;
-
+  // Update session on mount if ID exists
   useEffect(() => {
-    currentExerciseRef.current = currentExercise;
-    isPausedRef.current = isPaused;
-  }, [currentExercise]);
+    if (sessionIdParam) {
+      setSessionId(sessionIdParam);
+    }
+  }, [sessionIdParam]);
 
+  // Update refs
   useEffect(() => {
+    currentStepRef.current = currentStep;
     isPausedRef.current = isPaused;
-  }, [isPaused]);
+  }, [currentStep, isPaused]);
 
-  const resolveExerciseType = (exercise: typeof currentExercise, exerciseName?: string): ExerciseType => {
-    if (!exercise) return 'squat';
-
-    // Check exercise name first (most reliable)
+  // Helper to resolve exercise type
+  const resolveExerciseType = (step: typeof currentStep, exerciseName?: string): ExerciseType => {
+    if (!step) return 'squat';
     const name = (exerciseName || '').toLowerCase();
 
-    // Elbow Flexion detection
-    if (name.includes('elbow') && name.includes('flexion')) return 'elbow_flexion';
-    if (name.includes('elbow')) return 'elbow_flexion';
-    if (name.includes('bicep')) return 'elbow_flexion';
-
-    // SLR detection
-    if (name.includes('slr')) return 'slr';
-    if (name.includes('straight leg raise')) return 'slr';
-    if (name.includes('straight leg')) return 'slr';
-    if (name.includes('leg raise')) return 'slr';
-
-    // Squat detection
+    if (name.includes('elbow') || name.includes('bicep') || name.includes('curl')) return 'elbow_flexion';
+    if (name.includes('slr') || name.includes('leg raise')) return 'slr';
     if (name.includes('squat')) return 'squat';
 
-    // Fallback to notes (for backward compatibility)
-    const note = (exercise.notes || '').toLowerCase();
-    if (note.includes('elbow') || note.includes('bicep')) return 'elbow_flexion';
-    if (note.includes('slr') || note.includes('raise') || note.includes('leg')) return 'slr';
-    if (note.includes('squat') || note === 'squat') return 'squat';
+    const note = (step.notes || '').toLowerCase();
+    if (note.includes('elbow')) return 'elbow_flexion';
 
-    // Default to squat (safest default)
     return 'squat';
   };
 
-  const createDetector = (type: ExerciseType): RepDetector => {
+  const createDetector = (type: ExerciseType, side: 'left' | 'right'): RepDetector => {
     switch (type) {
       case 'elbow_flexion':
-        return createElbowFlexionRepDetector();
+        return createElbowFlexionRepDetector(side);
       case 'slr':
-        return createSlrRepDetector();
+        return createSlrRepDetector(side);
       case 'squat':
       default:
-        return createSquatRepDetector();
+        return createSquatRepDetector(side);
     }
   };
 
   // Recreate detector when exercise changes
   useEffect(() => {
-    if (!currentExercise) return;
-    const exerciseDetails = exerciseMap.get(currentExercise.exercise_id);
-    const exerciseName = exerciseDetails?.name;
-    const type = resolveExerciseType(currentExercise, exerciseName);
-    const detector = createDetector(type);
+    if (!currentStep) return;
+    const exerciseName = exerciseMap.get(currentStep.exercise_id)?.name;
+    const type = resolveExerciseType(currentStep, exerciseName);
+
+    // Default to 'left' if not specified, or parse from notes if really needed. 
+    // Ideally ProtocolStep should have a side field.
+    const side = (currentStep.side as 'left' | 'right') || 'left';
+
+    const detector = createDetector(type, side);
     detector.reset();
     repDetectorRef.current = detector;
+    lastRepCountRef.current = 0;
+
     setLastRep(null);
-    // Ensure counters are initialized for this exercise
+    setLiveFeedback('Get ready...');
     setExerciseRepsCompleted((prev) => ({
       ...prev,
-      [currentExercise.exercise_id]: prev[currentExercise.exercise_id] || 0,
+      [currentStep.exercise_id]: prev[currentStep.exercise_id] || 0,
     }));
-  }, [currentExercise, currentExerciseIndex, exerciseMap]);
-
-  const formQualityToScore = (quality?: string | null) => {
-    switch (quality) {
-      case 'good':
-        return 90;
-      case 'too_shallow':
-        return 65;
-      case 'too_fast':
-        return 70;
-      case 'compensated':
-        return 60;
-      default:
-        return null;
-    }
-  };
-
-  // Start session mutation
-  const startSessionMutation = useMutation({
-    mutationFn: async () => {
-      if (!assignmentId || !protocolId || !user?.id) {
-        throw new Error('Missing required data to start session');
-      }
-      const session = await sessionService.create({
-        patient_id: user.id,
-        assignment_id: assignmentId,
-        protocol_id: protocolId,
-      });
-      return session;
-    },
-    onSuccess: (session: Session) => {
-      setSessionId(session.id);
-      setSessionStarted(true);
-      toast({
-        title: 'Session Started',
-        description: 'Your session has begun. Good luck!',
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to start session',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  // Complete session mutation
-  const completeSessionMutation = useMutation({
-    mutationFn: async (completionData: SessionComplete) => {
-      if (!sessionId) throw new Error('No active session');
-      return sessionService.complete(sessionId, completionData);
-    },
-    onSuccess: () => {
-      toast({
-        title: 'Session Completed',
-        description: 'Great work! Your session has been saved.',
-      });
-      queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      navigate('/patient/home');
-    },
-    onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to complete session',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  // Auto-start session if assignment_id and protocol_id are provided
-  useEffect(() => {
-    if (assignmentId && protocolId && !sessionId && !sessionStarted && !startSessionMutation.isPending) {
-      startSessionMutation.mutate();
-    }
-  }, [assignmentId, protocolId, sessionId, sessionStarted]);
+  }, [currentStep, currentExerciseIndex, exerciseMap]);
 
   /**
    * Draw a simple skeleton on the canvas using normalized landmarks.
@@ -310,14 +215,17 @@ export default function PatientSessionActive() {
       if (!a || !b) return;
       const pa = toPx(a);
       const pb = toPx(b);
-      ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.lineTo(pb.x, pb.y);
-      ctx.stroke();
+      // Only draw visible points
+      if ((a.visibility ?? 1) > 0.5 && (b.visibility ?? 1) > 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(pa.x, pa.y);
+        ctx.lineTo(pb.x, pb.y);
+        ctx.stroke();
+      }
     });
 
     landmarks.forEach((lm) => {
-      if (!lm) return;
+      if (!lm || (lm.visibility ?? 1) < 0.5) return;
       const p = toPx(lm);
       ctx.beginPath();
       ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
@@ -359,26 +267,51 @@ export default function PatientSessionActive() {
         const loop = async () => {
           if (!poseClientRef.current || !videoRef.current) return;
           const result = await poseClientRef.current.process(videoRef.current);
+
           if (result?.landmarks) {
-            // Rep detection
+            // Rep detection logic
             const detector = repDetectorRef.current;
-            const exercise = currentExerciseRef.current;
-            if (detector && exercise && !isPausedRef.current) {
-              const event = detector.update({
+            const step = currentStepRef.current;
+
+            if (detector && step && !isPausedRef.current) {
+              const output: RepOutput = detector.update({
                 landmarks: result.landmarks,
                 timestampMs: performance.now(),
               });
-              if (event) {
-                const exerciseId = exercise.exercise_id || 'exercise-unknown'; // TODO: replace with real exercise metadata if available
-                const payload = repEventToSessionRep(event, exerciseId);
-                setLiveReps((prev) => [...prev, payload]);
-                setLastRep(payload);
-                setExerciseRepsCompleted((prev) => ({
-                  ...prev,
-                  [exerciseId]: (prev[exerciseId] || 0) + 1,
-                }));
+
+              // Update Live UI
+              setLiveFeedback(output.feedback);
+              if (output.currentAngle !== undefined) {
+                setCurrentAngle(output.currentAngle);
+              }
+
+              // Check for NEW rep
+              if (output.repCount > lastRepCountRef.current) {
+                lastRepCountRef.current = output.repCount;
+
+                // Rep completed!
+                if (output.lastRep) {
+                  const exerciseId = step.exercise_id || 'exercise-unknown';
+                  const payload: SessionRepPayload = {
+                    exerciseId,
+                    repIndex: output.repCount,
+                    romMax: output.lastRep.maxAngle - output.lastRep.minAngle, // Approximation
+                    romTarget: 90, // Demo hardcoded or pull from protocol?
+                    accuracyScore: Math.round((output.lastRep.formScore / 100) * 100), // Map to 0-100 if needed
+                    formQuality: output.lastRep.formScore > 80 ? 'good' : 'improve',
+                    timestampMs: Date.now()
+                  };
+
+                  setLiveReps(prev => [...prev, payload]);
+                  setLastRep(payload);
+                  setExerciseRepsCompleted(prev => ({
+                    ...prev,
+                    [exerciseId]: (prev[exerciseId] || 0) + 1
+                  }));
+                }
               }
             }
+
             drawSkeleton(result.landmarks);
           }
           rafRef.current = requestAnimationFrame(loop);
@@ -415,335 +348,195 @@ export default function PatientSessionActive() {
     }
   };
 
-  const handleCompleteRep = () => {
-    toast({
-      title: 'Reps are counted automatically',
-      description: 'Keep moving—camera-based rep detection is active.',
-    });
-  };
-
   const handleEndSession = () => {
     setShowEndModal(true);
   };
 
   const handleSaveAndFinish = () => {
     if (!sessionId) {
-      toast({
-        title: 'Error',
-        description: 'No active session to complete',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'No active session', variant: 'destructive' });
       return;
     }
 
-    if (liveReps.length === 0) {
-      const confirmEmpty = window.confirm(
-        'No reps were detected. Do you still want to save this session?'
-      );
-      if (!confirmEmpty) return;
+    setIsSaving(true);
+
+    try {
+      // 1. Build SessionResult for backend (simulated)
+      const exercisesExecuted: ExerciseResult[] = Object.keys(exerciseRepsCompleted).map(exId => {
+        // Filter reps for this exercise
+        const reps = liveReps.filter(r => r.exerciseId === exId);
+        const total = reps.length;
+        // Simple avgs
+        const avgScore = total > 0 ? reps.reduce((s, r) => s + (r.accuracyScore || 0), 0) / total : 0;
+        const avgMaxAngle = total > 0 ? reps.reduce((s, r) => s + (r.romMax || 0), 0) / total : 0;
+
+        return {
+          exerciseKey: exId,
+          totalReps: total,
+          avgMaxAngle,
+          avgFormScore: avgScore
+        };
+      });
+
+      const sessionResult: SessionResult = {
+        sessionId,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        exercises: exercisesExecuted
+      };
+
+      console.log('SESSION_RESULT', sessionResult);
+
+      // 2. Call context update
+      updateSession(sessionId, {
+        status: 'completed',
+        pain_score_post: painLevelPost[0],
+        notes: sessionNotes || undefined,
+      });
+
+      toast({
+        title: 'Session Completed',
+        description: 'Great work! Check the console for the JSON payload.',
+      });
+      navigate('/patient/home');
+    } catch (e) {
+      console.error(e);
+      toast({ title: 'Error', variant: 'destructive', description: 'Failed to save.' });
+    } finally {
+      setIsSaving(false);
     }
-
-    const repsPayload: SessionRepCreate[] = liveReps.map((rep, idx) => ({
-      exercise_id: rep.exerciseId,
-      rep_index: rep.repIndex ?? idx + 1,
-      rom_max: rep.romMax ?? null,
-      rom_target: rep.romTarget ?? null,
-      accuracy_score: rep.accuracyScore ?? null,
-      tempo_score: rep.tempoScore ?? null,
-      form_quality: formQualityToScore(rep.formQuality) ?? null,
-      error_segment: rep.errorSegment ?? null,
-      timestamp_ms: rep.timestampMs ?? null,
-    }));
-
-    const completionData: SessionComplete = {
-      pain_score_pre: painLevelPre[0],
-      pain_score_post: painLevelPost[0],
-      notes: sessionNotes || null,
-      reps: repsPayload,
-    };
-
-    completeSessionMutation.mutate(completionData);
-    repDetectorRef.current?.reset();
   };
 
-  // Loading state
-  if (protocolLoading || startSessionMutation.isPending) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto" />
-          <p className="text-muted-foreground">Loading session...</p>
-        </div>
-      </div>
-    );
-  }
+  // Metrics calculation
+  const currentReps = currentStep ? (exerciseRepsCompleted[currentStep.exercise_id] || 0) : 0;
+  const targetReps = currentStep?.reps || 10;
+  const overallProgress = totalExercises > 0
+    ? ((currentExerciseIndex + (currentReps / targetReps)) / totalExercises) * 100
+    : 0;
 
   // Error state
-  if (!assignmentId || !protocolId) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="text-center space-y-4 max-w-md">
-          <AlertCircle className="w-12 h-12 text-destructive mx-auto" />
-          <h2 className="text-xl font-semibold">Missing Session Information</h2>
-          <p className="text-muted-foreground">
-            Unable to start session. Please select a protocol from your sessions page.
-          </p>
-          <Button onClick={() => navigate('/patient/sessions')}>
-            Go to Sessions
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!protocol || exercises.length === 0) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="text-center space-y-4 max-w-md">
-          <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto" />
-          <p className="text-muted-foreground">Loading protocol exercises...</p>
-        </div>
-      </div>
-    );
-  }
+  if (!protocolIdParam) return <div className="p-10 text-center">Missing Protocol ID</div>;
+  if (!protocol || steps.length === 0) return <div className="p-10 text-center">Loading Protocol...</div>;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background text-foreground">
       {/* Top Bar */}
-      <header className="h-12 md:h-14 border-b border-border bg-background/80 backdrop-blur-sm flex items-center justify-between px-3 md:px-6 sticky top-0 z-40">
-        <div className="flex items-center gap-2 md:gap-4 min-w-0">
-          <h1 className="text-sm md:text-lg font-semibold text-foreground truncate">{protocol.title}</h1>
-          <span className="pill pill-primary text-[10px] md:text-xs flex-shrink-0">
-            {sessionStarted ? 'In Progress' : 'Starting...'}
-          </span>
-        </div>
-        <Button variant="ghost" size="icon" onClick={handleEndSession} className="flex-shrink-0">
-          <X className="w-4 h-4 md:w-5 md:h-5" />
+      <header className="h-14 border-b bg-background flex items-center justify-between px-6 sticky top-0 z-40">
+        <h1 className="font-semibold">{protocol.title}</h1>
+        <Button variant="ghost" size="icon" onClick={handleEndSession}>
+          <X className="w-5 h-5" />
         </Button>
       </header>
 
-      <div className="flex flex-col lg:flex-row h-[calc(100vh-48px)] md:h-[calc(100vh-56px)]">
-        {/* Left side - Video/Pose Area */}
-        <div className="flex-1 p-3 md:p-6 flex flex-col min-h-[40vh] lg:min-h-0">
-          <div className="relative flex-1 bg-card rounded-xl md:rounded-2xl border border-border overflow-hidden">
-            <div className="absolute inset-0 bg-black">
-              <video
-                ref={videoRef}
-                className="w-full h-full object-cover opacity-80"
-                playsInline
-                muted
-                autoPlay
-              />
-              <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+      <div className="flex flex-col lg:flex-row h-[calc(100vh-56px)]">
+        {/* Left: Video */}
+        <div className="flex-1 p-4 relative bg-black flex flex-col justify-center overflow-hidden">
+          <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover opacity-60" playsInline muted autoPlay />
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
-              {cameraError && (
-                <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm text-center px-4">
-                  <div className="text-sm text-muted-foreground">{cameraError}</div>
-                </div>
-              )}
+          {/* Overlay Feedback */}
+          <div className="z-10 text-center space-y-2">
+            <div className="text-4xl md:text-6xl font-bold text-white drop-shadow-md">
+              {liveFeedback}
+            </div>
+            {currentAngle !== null && (
+              <div className="text-xl md:text-2xl text-emerald-400 font-mono drop-shadow-md">
+                {currentAngle}°
+              </div>
+            )}
+          </div>
 
-              {!cameraError && !poseReady && (
-                <div className="absolute inset-0 flex items-center justify-center text-center px-4">
-                  <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                    <p className="text-sm">Initializing camera...</p>
-                  </div>
-                </div>
-              )}
+          {/* Exercise Info Overlay */}
+          <div className="absolute top-4 left-4 bg-black/60 text-white p-3 rounded-lg backdrop-blur-sm z-20">
+            <div className="text-sm opacity-80">Exercise {currentExerciseIndex + 1}/{totalExercises}</div>
+            <div className="font-bold text-lg">{getCurrentExerciseName()}</div>
+            {currentStep.side && <div className="text-sm text-emerald-400 uppercase tracking-wider">{currentStep.side} Side</div>}
+          </div>
+
+          {cameraError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-background text-destructive z-30">
+              {cameraError}
+            </div>
+          )}
+          {!poseReady && !cameraError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black text-white z-30">
+              <Loader2 className="w-10 h-10 animate-spin" />
+            </div>
+          )}
+        </div>
+
+        {/* Right: Controls & Stats */}
+        <div className="w-full lg:w-96 border-l p-6 overflow-y-auto bg-card">
+          <div className="space-y-6">
+
+            {/* Rep Counter */}
+            <div className="text-center p-6 bg-secondary/20 rounded-2xl border-2 border-primary/20">
+              <div className="text-sm text-muted-foreground uppercase tracking-widest font-semibold mb-2">Reps</div>
+              <div className="text-6xl font-bold text-primary mb-1">
+                {currentReps}
+                <span className="text-2xl text-muted-foreground font-normal"> / {targetReps}</span>
+              </div>
             </div>
 
-            {/* Top-left exercise name */}
-            {currentExercise && (
-              <div className="absolute top-2 md:top-4 left-2 md:left-4">
-                <span className="pill bg-card/90 text-foreground backdrop-blur-sm border border-border text-[10px] md:text-xs">
-                  Exercise {currentExerciseIndex + 1}: Exercise {currentExercise.order_index}
-                </span>
+            {/* Last Rep Stats */}
+            {lastRep && (
+              <div className="bg-secondary/20 p-4 rounded-xl border border-border">
+                <div className="text-xs text-muted-foreground mb-2 font-medium uppercase">Last Rep Analysis</div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-2xl font-bold">{lastRep.accuracyScore}%</div>
+                    <div className="text-xs text-muted-foreground">Form Score</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold">{Math.round(lastRep.romMax || 0)}°</div>
+                    <div className="text-xs text-muted-foreground">ROM</div>
+                  </div>
+                </div>
               </div>
             )}
 
-            {/* Top-right exercise counter */}
-            <div className="absolute top-2 md:top-4 right-2 md:right-4">
-              <span className="text-[10px] md:text-sm text-muted-foreground bg-card/90 backdrop-blur-sm px-2 md:px-3 py-1 rounded-full border border-border">
-                {currentExerciseIndex + 1} of {totalExercises}
-              </span>
-            </div>
-
-            {/* Bottom overlay bar */}
-            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background/80 to-transparent p-3 md:p-6 pt-8 md:pt-12">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-3 md:gap-6">
-                  <div className="flex items-center gap-1 md:gap-2">
-                    <Target className="w-4 h-4 md:w-5 md:h-5 text-primary" />
-                    <span className="text-xs md:text-sm text-foreground font-medium">
-                      {currentReps}/{targetReps}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1 md:gap-2">
-                    <Clock className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-                    <span className="text-xs md:text-sm text-foreground font-medium">
-                      {Math.floor((Date.now() - (sessionStarted ? Date.now() : Date.now())) / 1000 / 60)}:{
-                        String(Math.floor(((Date.now() - (sessionStarted ? Date.now() : Date.now())) / 1000) % 60)).padStart(2, '0')
-                      }
-                    </span>
-                  </div>
-                </div>
-                <span className="pill pill-success flex items-center gap-1 text-[10px] md:text-xs">
-                  <CheckCircle className="w-3 h-3 md:w-4 md:h-4" />
-                  Ready
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Progress bar - Mobile only shows here */}
-          <div className="mt-3 md:mt-4 lg:hidden">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] md:text-xs text-muted-foreground">Progress</span>
-              <span className="text-[10px] md:text-xs text-foreground font-medium">
-                {Math.round(overallProgress)}%
-              </span>
-            </div>
-            <Progress value={overallProgress} className="h-1.5 md:h-2" />
-          </div>
-        </div>
-
-        {/* Right side - Session details */}
-        <div className="w-full lg:w-[35%] lg:max-w-md border-t lg:border-t-0 lg:border-l border-border p-3 md:p-6 overflow-y-auto scrollbar-thin flex-shrink-0">
-          {/* Current Exercise Card */}
-          {currentExercise && (
-            <div className="stat-card mb-3 md:mb-4">
-              <h3 className="text-xs md:text-sm font-medium text-muted-foreground mb-1 md:mb-2">
-                Current Exercise
-              </h3>
-              <h4 className="text-base md:text-lg font-semibold text-foreground mb-1 md:mb-2">
-                Exercise {currentExercise.order_index}
-              </h4>
-              <p className="text-xs md:text-sm text-primary mb-2 md:mb-3">
-                {currentExercise.sets ? `${currentExercise.sets} sets × ` : ''}
-                {currentExercise.reps ? `${currentExercise.reps} reps` : ''}
-                {currentExercise.duration_seconds ? `${currentExercise.duration_seconds}s hold` : ''}
-                {currentExercise.side && ` (${currentExercise.side})`}
-              </p>
-              {currentExercise.notes && (
-                <p className="text-xs md:text-sm text-muted-foreground">{currentExercise.notes}</p>
-              )}
-              <div className="mt-3 md:mt-4 pt-3 md:pt-4 border-t border-border">
+            {/* Controls */}
+            <div className="space-y-3">
+              <div className="flex gap-3">
                 <Button
-                  onClick={handleCompleteRep}
-                  className="w-full"
-                  disabled
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handlePrevExercise}
+                  disabled={currentExerciseIndex === 0}
                 >
-                  Auto-detected via camera
+                  <SkipBack className="w-4 h-4 mr-2" /> Prev
                 </Button>
-                <p className="text-[10px] md:text-xs text-muted-foreground mt-2 text-center">
-                  Reps are counted automatically from the pose stream.
-                </p>
+                <Button
+                  className="flex-1"
+                  onClick={handleNextExercise}
+                  disabled={currentExerciseIndex === totalExercises - 1}
+                >
+                  Next <SkipForward className="w-4 h-4 ml-2" />
+                </Button>
               </div>
-            </div>
-          )}
 
-          {/* Real-time Metrics Card */}
-          <div className="stat-card mb-3 md:mb-4">
-            <h3 className="text-xs md:text-sm font-medium text-muted-foreground mb-2 md:mb-3">
-              Real-time Metrics
-            </h3>
-            <div className="space-y-3 md:space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs md:text-sm text-foreground">Reps Completed</span>
-                  <span className="text-xs md:text-sm text-foreground font-medium">
-                    {currentReps} / {targetReps}
-                  </span>
-                </div>
-                <Progress value={(currentReps / targetReps) * 100} className="h-1.5 md:h-2" />
-              </div>
-              <div className="grid grid-cols-2 gap-3 text-xs md:text-sm">
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground">Total reps (session)</span>
-                  <span className="font-semibold text-foreground">{liveReps.length}</span>
-                  {accuracyAvg !== null && (
-                    <span className="text-muted-foreground text-[11px]">Avg accuracy: {accuracyAvg}%</span>
-                  )}
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground">Last rep</span>
-                  {lastRep ? (
-                    <>
-                      <span className="font-semibold text-foreground">
-                        ROM {Math.round(lastRep.romMax ?? 0)}° • Acc {lastRep.accuracyScore ?? '-'}%
-                      </span>
-                      <span className="text-muted-foreground text-[11px]">
-                        {lastRep.formQuality === 'good'
-                          ? 'Good rep'
-                          : lastRep.formQuality === 'too_shallow'
-                            ? 'Go deeper'
-                            : lastRep.formQuality === 'too_fast'
-                              ? 'Slow down'
-                              : lastRep.errorSegment === 'trunk_lean'
-                                ? 'Watch your trunk'
-                                : 'Keep form steady'}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-muted-foreground">Waiting for first rep</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Desktop Progress */}
-          <div className="hidden lg:block mb-4">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs text-muted-foreground">Overall Progress</span>
-              <span className="text-xs text-foreground font-medium">{Math.round(overallProgress)}%</span>
-            </div>
-            <Progress value={overallProgress} className="h-2" />
-          </div>
-
-          {/* Control Buttons */}
-          <div className="space-y-2 md:space-y-3">
-            <div className="flex gap-2 md:gap-3">
               <Button
-                variant="outline"
-                className="flex-1 text-xs md:text-sm h-9 md:h-10"
-                onClick={handlePrevExercise}
-                disabled={currentExerciseIndex === 0}
-              >
-                <SkipBack className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                Prev
-              </Button>
-              <Button
-                className="flex-1 text-xs md:text-sm h-9 md:h-10"
-                onClick={handleNextExercise}
-                disabled={currentExerciseIndex === totalExercises - 1}
-              >
-                Next
-                <SkipForward className="w-3 h-3 md:w-4 md:h-4 ml-1 md:ml-2" />
-              </Button>
-            </div>
-            <div className="flex gap-2 md:gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1 text-xs md:text-sm h-9 md:h-10"
+                variant={isPaused ? "default" : "secondary"}
+                className="w-full"
                 onClick={() => setIsPaused(!isPaused)}
-                disabled={!sessionStarted}
               >
-                {isPaused ? (
-                  <Play className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                ) : (
-                  <Pause className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                )}
-                {isPaused ? 'Resume' : 'Pause'}
+                {isPaused ? <Play className="w-4 h-4 mr-2" /> : <Pause className="w-4 h-4 mr-2" />}
+                {isPaused ? "Resume Session" : "Pause Session"}
               </Button>
+
               <Button
                 variant="destructive"
-                className="flex-1 text-xs md:text-sm h-9 md:h-10"
+                className="w-full"
                 onClick={handleEndSession}
-                disabled={!sessionStarted}
               >
-                End
+                End Session
               </Button>
+            </div>
+
+            {/* Debug/Notes */}
+            <div className="text-xs text-muted-foreground text-center pt-10">
+              <p>Camera-based detection active.</p>
+              <p>Ensure your full body is visible.</p>
             </div>
           </div>
         </div>
@@ -751,86 +544,30 @@ export default function PatientSessionActive() {
 
       {/* End Session Modal */}
       <Dialog open={showEndModal} onOpenChange={setShowEndModal}>
-        <DialogContent className="max-w-[95vw] md:max-w-md">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>Session Summary</DialogTitle>
-            <DialogDescription>Great work completing your session!</DialogDescription>
+            <DialogTitle>Finish Session</DialogTitle>
+            <DialogDescription>Rate your pain level to complete.</DialogDescription>
           </DialogHeader>
-
-          <div className="space-y-4 md:space-y-6">
-            {/* Summary Stats */}
-            <div className="grid grid-cols-3 gap-2 md:gap-3">
-              <div className="bg-secondary/50 rounded-lg p-2 md:p-3 text-center">
-                <p className="text-lg md:text-xl font-bold text-foreground">
-                  {Object.values(exerciseRepsCompleted).reduce((a, b) => a + b, 0)}
-                </p>
-                <p className="text-[10px] md:text-xs text-muted-foreground">Total Reps</p>
-              </div>
-              <div className="bg-secondary/50 rounded-lg p-2 md:p-3 text-center">
-                <p className="text-lg md:text-xl font-bold text-foreground">
-                  {Math.round(
-                    (Object.values(exerciseRepsCompleted).reduce((a, b) => a + b, 0) /
-                      exercises.reduce((sum, ex) => sum + (ex.reps || 0), 0)) *
-                    100
-                  ) || 0}
-                  %
-                </p>
-                <p className="text-[10px] md:text-xs text-muted-foreground">Completion</p>
-              </div>
-              <div className="bg-secondary/50 rounded-lg p-2 md:p-3 text-center">
-                <p className="text-lg md:text-xl font-bold text-primary">
-                  {exercises.length}
-                </p>
-                <p className="text-[10px] md:text-xs text-muted-foreground">Exercises</p>
-              </div>
-            </div>
-
-            {/* Pain Slider */}
+          <div className="space-y-6 pt-4">
             <div>
-              <label className="text-xs md:text-sm font-medium text-foreground mb-2 md:mb-3 block">
-                Pain Level (after session): {painLevelPost[0]} / 10
-              </label>
+              <div className="flex justify-between mb-2">
+                <span className="text-sm font-medium">Pain Level: {painLevelPost}</span>
+              </div>
               <Slider
                 value={painLevelPost}
                 onValueChange={setPainLevelPost}
                 max={10}
                 step={1}
-                className="w-full"
-              />
-              <div className="flex justify-between text-[10px] md:text-xs text-muted-foreground mt-1">
-                <span>No pain</span>
-                <span>Severe</span>
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div>
-              <label className="text-xs md:text-sm font-medium text-foreground mb-2 block">
-                How did this session feel?
-              </label>
-              <Textarea
-                placeholder="Add any notes..."
-                value={sessionNotes}
-                onChange={(e) => setSessionNotes(e.target.value)}
-                rows={3}
-                className="text-sm"
               />
             </div>
-
-            <Button
-              className="w-full"
-              size="lg"
-              onClick={handleSaveAndFinish}
-              disabled={completeSessionMutation.isPending}
-            >
-              {completeSessionMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                'Save & Finish'
-              )}
+            <Textarea
+              placeholder="Session notes..."
+              value={sessionNotes}
+              onChange={e => setSessionNotes(e.target.value)}
+            />
+            <Button className="w-full" onClick={handleSaveAndFinish} disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Save & Finish'}
             </Button>
           </div>
         </DialogContent>

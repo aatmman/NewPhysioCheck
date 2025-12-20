@@ -59,8 +59,8 @@ export function ScheduleSessionDialog({ open, onOpenChange, patientId: initialPa
 
     try {
       createSession({
-        patientId: selectedPatientId,
-        protocolId: selectedProtocolId,
+        patient_id: selectedPatientId,
+        protocol_id: selectedProtocolId,
         date: sessionDate, // YYYY-MM-DD
         notes
       });

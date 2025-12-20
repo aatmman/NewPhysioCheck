@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useSession } from '@/context/SessionContext';
+import { useProtocol } from '@/context/ProtocolContext';
+import { useAuth } from '@/context/AuthContext';
 import { Search, Eye, Activity, Target, TrendingUp, Loader2 } from 'lucide-react';
 import { PatientLayout } from '@/components/layout/PatientLayout';
 import { Button } from '@/components/ui/button';
@@ -17,32 +19,19 @@ export default function PatientSessions() {
   const [timeFilter, setTimeFilter] = useState('30');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
 
-  // Fetch all sessions for current patient
-  const { data: sessionsData, isLoading } = useQuery({
-    queryKey: ['sessions', 'patient-all'],
-    queryFn: () => sessionService.getAll({}),
-  });
+  const { sessions: allSessions } = useSession();
+  const { protocols: allProtocols } = useProtocol();
+  const { user } = useAuth(); // Need to get user to filter
 
-  // Fetch protocols for protocol names - use getById for each session's protocol
-  // (patients can access protocols via getById if they're assigned)
-  const { data: protocolsData } = useQuery({
-    queryKey: ['protocols', 'sessions', sessionsData?.data?.map((s: Session) => s.protocol_id).join(',') || ''],
-    queryFn: async () => {
-      if (!sessionsData?.data || sessionsData.data.length === 0) return [];
-      // Get unique protocol IDs from sessions
-      const protocolIds = [...new Set(sessionsData.data.map((s: Session) => s.protocol_id))];
-      // Fetch each protocol by ID
-      const protocolPromises = protocolIds.map(protocolId =>
-        protocolService.getById(protocolId).catch(() => null)
-      );
-      const protocols = (await Promise.all(protocolPromises)).filter((p): p is Protocol => p !== null);
-      return protocols;
-    },
-    enabled: !!sessionsData?.data && sessionsData.data.length > 0,
-  });
+  // Filter sessions for current patient
+  const sessionsData = useMemo(() => {
+    return allSessions.filter(s => s.patientId === user?.id);
+  }, [allSessions, user?.id]);
 
-  const sessions: Session[] = useMemo(() => sessionsData?.data || [], [sessionsData?.data]);
-  const protocols: Protocol[] = useMemo(() => protocolsData || [], [protocolsData]);
+  const isLoading = false;
+
+  const sessions: Session[] = sessionsData;
+  const protocols: Protocol[] = allProtocols;
 
   // Create protocol map
   const protocolMap = useMemo(() => {
@@ -194,10 +183,10 @@ export default function PatientSessions() {
                       </div>
                       <span
                         className={`pill text-[10px] ${session.status === 'completed'
-                            ? 'pill-success'
-                            : session.status === 'in_progress'
-                              ? 'pill-primary'
-                              : 'pill-danger'
+                          ? 'pill-success'
+                          : session.status === 'in_progress'
+                            ? 'pill-primary'
+                            : 'pill-danger'
                           }`}
                       >
                         {session.status === 'completed'
@@ -252,12 +241,12 @@ export default function PatientSessions() {
                         <td>
                           <span
                             className={`pill ${session.status === 'completed'
-                                ? 'pill-success'
-                                : session.status === 'in_progress'
-                                  ? 'pill-primary'
-                                  : session.status === 'scheduled'
-                                    ? 'pill-neutral'
-                                    : 'pill-danger'
+                              ? 'pill-success'
+                              : session.status === 'in_progress'
+                                ? 'pill-primary'
+                                : session.status === 'scheduled'
+                                  ? 'pill-neutral'
+                                  : 'pill-danger'
                               }`}
                           >
                             {session.status === 'completed'

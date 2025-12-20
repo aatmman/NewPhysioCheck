@@ -1,79 +1,58 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
+import type { Protocol, ProtocolStep, Exercise } from '@/types/api';
 
-export type ExerciseKey = 'SLR' | 'SQUAT' | 'ELBOW_FLEXION';
-
-export interface Exercise {
-    id: string;
-    key: ExerciseKey;
-    name: string;
-    description?: string;
-    image_url?: string;
-    joint?: string;
-    difficulty?: string;
-    position?: string;
-}
-
-export interface ProtocolExercise {
-    id: string; // unique id for this step
-    exerciseId: string;
-    exerciseKey: ExerciseKey;
-    // UI fields used in builder
-    sets?: number;
-    reps?: number;
-    duration_seconds?: number | null;
-    side?: 'left' | 'right' | 'both' | null;
-    order_index?: number;
-    name?: string; // Helper for UI display
-}
-
-export interface Protocol {
-    id: string;
-    name: string;
-    exercises: ProtocolExercise[];
-    createdBy: string;
-    createdAt: string;
-}
+// Re-export Exercise from api.ts effectively by using it
+export { type Exercise };
 
 interface ProtocolContextType {
     exercises: Exercise[];
     protocols: Protocol[];
-    createProtocol: (input: { name: string; exercises: Omit<ProtocolExercise, 'id'>[] }) => Protocol;
+    createProtocol: (input: { title: string; steps: Omit<ProtocolStep, 'id' | 'created_at' | 'protocol_id'>[] }) => Protocol;
 }
 
 const ProtocolContext = createContext<ProtocolContextType | undefined>(undefined);
 
-// Dummy Exercises Data
+// Dummy Exercises Data matching Exercise interface from api.ts
 const DUMMY_EXERCISES: Exercise[] = [
     {
         id: 'ex-1',
-        key: 'SLR',
         name: 'Straight Leg Raise',
         description: 'Lift your leg while keeping it straight.',
         joint: 'Knee',
         difficulty: 'Beginner',
         position: 'Supine',
-        image_url: 'https://images.unsplash.com/photo-1599058945522-28d584b6f0ff?w=800&auto=format&fit=crop&q=60' // Placeholder
+        image_url: 'https://images.unsplash.com/photo-1599058945522-28d584b6f0ff?w=800&auto=format&fit=crop&q=60', // Placeholder
+        created_at: new Date().toISOString(),
+        normal_range_min: null,
+        normal_range_max: null,
+        equipment: null
     },
     {
         id: 'ex-2',
-        key: 'SQUAT',
         name: 'Squat',
         description: 'Basic squat movement.',
         joint: 'Hip/Knee',
         difficulty: 'Intermediate',
         position: 'Standing',
-        image_url: 'https://images.unsplash.com/photo-1574680096141-1cddd32e01f9?w=800&auto=format&fit=crop&q=60'
+        image_url: 'https://images.unsplash.com/photo-1574680096141-1cddd32e01f9?w=800&auto=format&fit=crop&q=60',
+        created_at: new Date().toISOString(),
+        normal_range_min: null,
+        normal_range_max: null,
+        equipment: null
     },
     {
         id: 'ex-3',
-        key: 'ELBOW_FLEXION',
         name: 'Elbow Flexion',
         description: 'Bending the elbow.',
         joint: 'Elbow',
         difficulty: 'Beginner',
         position: 'Sitting',
-        image_url: 'https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=800&auto=format&fit=crop&q=60'
+        image_url: 'https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=800&auto=format&fit=crop&q=60',
+        created_at: new Date().toISOString(),
+        normal_range_min: null,
+        normal_range_max: null,
+        equipment: null
     }
 ];
 
@@ -81,19 +60,55 @@ export function ProtocolProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
     const [protocols, setProtocols] = useState<Protocol[]>(() => {
         const stored = localStorage.getItem('dummy_protocols');
-        return stored ? JSON.parse(stored) : [];
+        if (stored) {
+            try {
+                const parsed = JSON.parse(stored);
+                // Migration: Handle legacy data where 'name' was used instead of 'title'
+                // and 'exercises' were used instead of 'steps'
+                return parsed.map((p: any) => ({
+                    ...p,
+                    title: p.title || p.name || 'Untitled Protocol', // Fallback for legacy 'name'
+                    steps: p.steps || p.exercises?.map((ex: any, idx: number) => ({ // Fallback for legacy 'exercises'
+                        id: ex.id || crypto.randomUUID(),
+                        protocol_id: p.id,
+                        exercise_id: ex.exerciseId || ex.exercise_id,
+                        sets: ex.sets,
+                        reps: ex.reps,
+                        duration_seconds: ex.duration_seconds,
+                        side: ex.side,
+                        order_index: idx,
+                        created_at: new Date().toISOString()
+                    })) || []
+                }));
+            } catch (e) {
+                console.error('Failed to parse protocols', e);
+                return [];
+            }
+        }
+        return [];
     });
 
-    const createProtocol = (input: { name: string; exercises: Omit<ProtocolExercise, 'id'>[] }) => {
+    const createProtocol = (input: { title: string; steps: Omit<ProtocolStep, 'id' | 'created_at' | 'protocol_id'>[] }) => {
+        const protocolId = crypto.randomUUID();
         const newProtocol: Protocol = {
-            id: crypto.randomUUID(),
-            name: input.name,
-            exercises: input.exercises.map(ex => ({
-                ...ex,
-                id: crypto.randomUUID()
-            })),
-            createdBy: user?.id || 'unknown',
-            createdAt: new Date().toISOString()
+            id: protocolId,
+            title: input.title,
+            doctor_id: user?.id || 'unknown',
+            notes: null,
+            created_at: new Date().toISOString(),
+            steps: input.steps.map((step, index) => ({
+                ...step,
+                id: crypto.randomUUID(),
+                protocol_id: protocolId,
+                created_at: new Date().toISOString(),
+                // Ensure required fields are present (handling optional vs null differences if any)
+                sets: step.sets ?? null,
+                reps: step.reps ?? null,
+                duration_seconds: step.duration_seconds ?? null,
+                side: step.side ?? null,
+                notes: step.notes ?? null,
+                order_index: index
+            }))
         };
 
         const updated = [...protocols, newProtocol];
