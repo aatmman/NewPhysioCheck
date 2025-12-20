@@ -19,7 +19,7 @@ interface TopBarProps {
 
 export function TopBar({ title, subtitle }: TopBarProps) {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, logout } = useAuth();
 
   // Get unread messages count with polling for notifications
   const { data: messagesData } = useQuery({
@@ -49,7 +49,7 @@ export function TopBar({ title, subtitle }: TopBarProps) {
   };
 
   const handleLogout = async () => {
-    await signOut();
+    logout();
     navigate('/login');
   };
 

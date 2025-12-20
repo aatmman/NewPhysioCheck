@@ -37,11 +37,13 @@ import { useAuth } from "@/context/AuthContext";
  * Otherwise, show login page
  */
 function RootRedirect() {
-  const { role, loading } = useAuth();
+  const { user, loading } = useAuth();
 
   if (loading) {
     return <div className="flex h-screen items-center justify-center">Loading...</div>; // Simple loader
   }
+
+  const role = user?.role;
 
   if (role === 'patient') return <Navigate to="/patient/home" replace />;
   if (role === 'doctor' || role === 'admin') return <Navigate to="/dashboard" replace />;

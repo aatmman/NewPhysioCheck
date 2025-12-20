@@ -30,16 +30,62 @@ const Patients = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Fetch patients with filters from backend API
+  // DUMMY DATA FOR DEVELOPMENT
+  const DUMMY_PATIENTS: Patient[] = [
+    {
+      id: 'patient-1',
+      doctor_id: 'doctor-1',
+      full_name: 'Demo Patient',
+      date_of_birth: '1990-01-01',
+      condition: 'ACL Reconstruction',
+      status: 'active',
+      notes: 'Recovering well',
+      created_at: new Date().toISOString(),
+      total_sessions: 12,
+      missed_sessions: 1,
+    },
+    {
+      id: 'patient-2',
+      doctor_id: 'doctor-1',
+      full_name: 'John Doe',
+      date_of_birth: '1985-05-15',
+      condition: 'Rotator Cuff Repair',
+      status: 'on_hold',
+      notes: 'Traveling',
+      created_at: new Date().toISOString(),
+      total_sessions: 5,
+      missed_sessions: 0,
+    }
+  ];
+
+  // Fetch patients with filters from backend API (DUMMY MODE)
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['patients', currentPage, statusFilter, debouncedSearch],
-    queryFn: () =>
-      patientService.getAll({
-        skip: (currentPage - 1) * itemsPerPage,
-        limit: itemsPerPage,
-        status_filter: statusFilter !== 'all' ? (statusFilter as 'active' | 'on_hold' | 'discharged') : undefined,
-        search: debouncedSearch || undefined,
-      }),
+    queryFn: async () => {
+      // Simulate network delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      let filtered = [...DUMMY_PATIENTS];
+
+      if (statusFilter !== 'all') {
+        filtered = filtered.filter(p => p.status === statusFilter);
+      }
+
+      if (debouncedSearch) {
+        const lower = debouncedSearch.toLowerCase();
+        filtered = filtered.filter(p =>
+          p.full_name.toLowerCase().includes(lower) ||
+          (p.condition && p.condition.toLowerCase().includes(lower))
+        );
+      }
+
+      return {
+        data: filtered,
+        total: filtered.length,
+        skip: 0,
+        limit: itemsPerPage
+      };
+    },
   });
 
 
@@ -60,22 +106,24 @@ const Patients = () => {
 
 
 
-  // Delete patient mutation
+  // Delete patient mutation (DUMMY MODE)
   const deletePatientMutation = useMutation({
     mutationFn: async (patientId: string) => {
-      await patientService.delete(patientId);
+      // Simulate delete
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log('Dummy delete patient:', patientId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients'] });
       toast({
         title: 'Success',
-        description: 'Patient deleted successfully',
+        description: 'Patient deleted successfully (Dummy Mode)',
       });
     },
     onError: (error: any) => {
       toast({
         title: 'Error',
-        description: error.response?.data?.detail || error.message || 'Failed to delete patient',
+        description: 'Failed to delete patient',
         variant: 'destructive',
       });
     },

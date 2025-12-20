@@ -1,6 +1,7 @@
 import { Bell, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/hooks/use-toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +19,8 @@ interface PatientTopBarProps {
 
 export function PatientTopBar({ title, subtitle }: PatientTopBarProps) {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, logout } = useAuth();
+  const { toast } = useToast();
 
   // Get unread messages count with polling for notifications
   const { data: messagesData } = useQuery({
@@ -39,8 +41,12 @@ export function PatientTopBar({ title, subtitle }: PatientTopBarProps) {
     navigate('/patient/settings');
   };
 
-  const handleLogout = async () => {
-    await signOut();
+  const handleLogout = () => { // Removed async
+    logout(); // Changed await signOut() to logout()
+    toast({ // Added toast notification
+      title: 'Logged out',
+      description: 'You have been successfully logged out',
+    });
     navigate('/login');
   };
 

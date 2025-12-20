@@ -2,6 +2,7 @@ import { User, Bell, Shield, Palette, HelpCircle, LogOut, ChevronRight } from 'l
 import { PatientLayout } from '@/components/layout/PatientLayout';
 import { useAuth } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { useToast } from '@/hooks/use-toast';
 
 const settingsSections = [
   { icon: User, label: 'Profile Settings', description: 'Update your personal information' },
@@ -12,11 +13,12 @@ const settingsSections = [
 ];
 
 export default function PatientSettings() {
-  const { user, signOut } = useAuth();
+  const { user, logout } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
 
-  const handleLogout = async () => {
-    await signOut();
+  const handleLogout = () => {
+    logout();
     navigate('/login');
   };
 

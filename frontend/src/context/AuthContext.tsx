@@ -1,13 +1,21 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { Session, User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabaseClient';
+
+// DUMMY AUTH TYPES
+export type Role = 'doctor' | 'patient';
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  role: Role;
+  email: string;
+}
 
 interface AuthContextType {
-  user: User | null;
-  role: 'doctor' | 'patient' | null;
-  session: Session | null;
+  user: AuthUser | null;
+  loginAsDoctor: () => void;
+  loginAsPatient: () => void;
+  logout: () => void;
   loading: boolean;
-  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -16,95 +24,59 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const STORAGE_KEY = 'physiocheck_dummy_user';
+
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<'doctor' | 'patient' | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Initialize from localStorage
   useEffect(() => {
-    let mounted = true;
-
-    // Fetch initial session
-    const initSession = async () => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
       try {
-        const { data: { session: initialSession } } = await supabase.auth.getSession();
-
-        if (mounted) {
-          if (initialSession) {
-            setSession(initialSession);
-            setUser(initialSession.user);
-            await fetchRole(initialSession.user.id);
-          } else {
-            setLoading(false);
-          }
-        }
-      } catch (error) {
-        console.error('Error getting session:', error);
-        if (mounted) setLoading(false);
+        setUser(JSON.parse(stored));
+      } catch (e) {
+        console.error('Failed to parse dummy user', e);
+        localStorage.removeItem(STORAGE_KEY);
       }
-    };
-
-    initSession();
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-      if (!mounted) return;
-
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
-
-      if (newSession?.user) {
-        // Only fetch role if we don't have it or if user changed
-        await fetchRole(newSession.user.id);
-      } else {
-        setRole(null);
-        setLoading(false);
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    }
+    setLoading(false);
   }, []);
 
-  const fetchRole = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-
-      if (error) {
-        console.warn('Error fetching role:', error);
-        // Fallback or handle cases where profile doesn't exist yet (e.g. fresh signup)
-      } else if (data) {
-        setRole((data as any).role as 'doctor' | 'patient');
-      }
-    } catch (e) {
-      console.error('Exception fetching role:', e);
-    } finally {
-      setLoading(false);
-    }
+  const loginAsDoctor = () => {
+    const doctorUser: AuthUser = {
+      id: 'doctor-1',
+      name: 'Demo Doctor',
+      role: 'doctor',
+      email: 'doctor@demo.com'
+    };
+    setUser(doctorUser);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(doctorUser));
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    setRole(null);
+  const loginAsPatient = () => {
+    const patientUser: AuthUser = {
+      id: 'patient-1',
+      name: 'Demo Patient',
+      role: 'patient',
+      email: 'patient@demo.com'
+    };
+    setUser(patientUser);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(patientUser));
+  };
+
+  const logout = () => {
     setUser(null);
-    setSession(null);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const value: AuthContextType = {
     user,
-    role,
-    session,
+    loginAsDoctor,
+    loginAsPatient,
+    logout,
     loading,
-    signOut,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
