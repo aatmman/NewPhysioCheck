@@ -1,48 +1,45 @@
-import { useQuery } from '@tanstack/react-query';
-import { messageService } from '@/lib/services/messageService';
-import { patientService } from '@/lib/services/patientService';
 import { useAuth } from '@/context/AuthContext';
 import { Loader2, User } from 'lucide-react';
 import { useMemo } from 'react';
-import type { Message, Patient } from '@/types/api';
+
+// Simplified types for dummy mode
+interface DummyMessage {
+  id: string;
+  text: string;
+  from_user: string;
+  to_user: string;
+  created_at: string;
+}
+
+interface DummyPatient {
+  id: string;
+  full_name: string;
+}
 
 export function RecentMessages() {
   const { user } = useAuth();
 
-  // Fetch recent messages
-  const { data: messagesData, isLoading: messagesLoading } = useQuery({
-    queryKey: ['messages', 'recent'],
-    queryFn: () => messageService.getAll({ limit: 10 }),
-  });
-
-  // Fetch patients to match with messages
-  const { data: patientsData } = useQuery({
-    queryKey: ['patients', 'for-messages'],
-    queryFn: () => patientService.getAll({ limit: 100 }),
-  });
-
-  const messages: Message[] = messagesData?.data || [];
-  const patients: Patient[] = patientsData?.data || [];
-
-  // Get recent messages with patient info
+  // Sort of dummy data for now as we don't have MessageContext yet
   const recentMessagesWithPatient = useMemo(() => {
     if (!user?.id) return [];
 
-    return messages
-      .slice(0, 3)
-      .map((msg) => {
-        // Get the other user (patient) from the message
-        const patientId = msg.from_user === user.id ? msg.to_user : msg.from_user;
-        const patient = patients.find((p) => p.id === patientId);
+    const dummyMessages = [
+      { id: 'm1', text: 'How are you feeling today?', from_user: 'doctor-1', to_user: 'patient-1', created_at: new Date().toISOString() },
+      { id: 'm2', text: 'Much better, thanks!', from_user: 'patient-1', to_user: 'doctor-1', created_at: new Date().toISOString() }
+    ];
 
-        return {
-          message: msg,
-          patient,
-          isFromCurrentUser: msg.from_user === user.id,
-        };
-      })
-      .filter((item) => item.patient); // Only show messages with known patients
-  }, [messages, patients, user?.id]);
+    const dummyPatients = [
+      { id: 'patient-1', full_name: 'Demo Patient' }
+    ];
+
+    return dummyMessages.map(msg => ({
+      message: msg,
+      patient: dummyPatients.find(p => p.id === (msg.from_user === 'doctor-1' ? msg.to_user : msg.from_user)),
+      isFromCurrentUser: msg.from_user === user.id
+    })).filter(m => m.patient);
+  }, [user?.id]);
+
+  const messagesLoading = false;
 
   if (messagesLoading) {
     return (
@@ -87,11 +84,10 @@ export function RecentMessages() {
                 <p className="font-medium text-foreground text-sm mb-1">You</p>
               )}
               <div
-                className={`message-bubble text-sm ${
-                  isFromCurrentUser
+                className={`message-bubble text-sm ${isFromCurrentUser
                     ? 'message-bubble-outgoing'
                     : 'message-bubble-incoming'
-                }`}
+                  }`}
               >
                 {message.text}
               </div>

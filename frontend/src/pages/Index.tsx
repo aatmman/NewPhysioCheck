@@ -1,90 +1,59 @@
-import { useQuery } from '@tanstack/react-query';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { StatCard } from '@/components/dashboard/StatCard';
 import { AdherenceChart } from '@/components/dashboard/AdherenceChart';
 import { RomPainChart } from '@/components/dashboard/RomPainChart';
 import { PatientsAttention } from '@/components/dashboard/PatientsAttention';
 import { RecentMessages } from '@/components/dashboard/RecentMessages';
-import { patientService } from '@/lib/services/patientService';
-import { sessionService } from '@/lib/services/sessionService';
+import { useSession } from '@/context/SessionContext';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { useMemo } from 'react';
 
 const Index = () => {
-  // Fetch patients
-  const { data: patientsData, isLoading: patientsLoading } = useQuery({
-    queryKey: ['patients', 'dashboard'],
-    queryFn: () => patientService.getAll({ limit: 100, status: 'active' }),
-  });
+  const { sessions: allSessions } = useSession();
 
-  // Fetch sessions for stats
-  const { data: sessionsData, isLoading: sessionsLoading } = useQuery({
-    queryKey: ['sessions', 'dashboard'],
-    queryFn: () => sessionService.getAll({}),
-  });
-
-  const isLoading = patientsLoading || sessionsLoading;
+  // DUMMY PATIENTS (Shared dummy data)
+  const DUMMY_PATIENTS = [
+    { id: 'patient-1', full_name: 'Demo Patient', status: 'active', condition: 'ACL Recovery' },
+    { id: 'patient-2', full_name: 'John Doe', status: 'active', condition: 'Shoulder Rehab' }
+  ];
 
   // Calculate dashboard stats from real data
   const dashboardStats = useMemo(() => {
-    const patients = patientsData?.data || [];
-    const sessions = sessionsData?.data || [];
+    const patients = DUMMY_PATIENTS;
+    const sessions = allSessions;
 
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString();
+    const getLocalDateString = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    const todayStr = getLocalDateString(today);
 
     const todaySessions = sessions.filter((s) => {
-      const sessionDateStr = s.scheduled_date || (s.started_at ? s.started_at.split('T')[0] : null);
-      if (!sessionDateStr) return false;
-      return sessionDateStr === todayStr.split('T')[0]; // Include all sessions for today, not just completed
+      const sessionDateStr = s.scheduled_date || (s.date) || (s.started_at ? s.started_at.split('T')[0] : null);
+      return sessionDateStr === todayStr;
     });
 
     // Calculate patients needing attention (low adherence or high pain)
+    // Simplified for dummy mode
     const patientsWithIssues = patients.filter((patient) => {
-      const patientSessions = sessions.filter((s) => s.patient_id === patient.id);
-      const completedSessions = patientSessions.filter((s) => s.status === 'completed');
-      const adherence =
-        completedSessions.length > 0
-          ? (completedSessions.length / Math.max(patientSessions.length, 1)) * 100
-          : 0;
-      const recentHighPain = completedSessions.some(
-        (s) => s.pain_score_post !== null && s.pain_score_post >= 7
-      );
-      return adherence < 50 || recentHighPain;
+      // Mock logic: patient-1 has issues
+      return patient.id === 'patient-1';
     });
-
-    // Calculate trend (simple: compare to previous period)
-    // TODO: Replace with proper trend calculation when date filtering is implemented
-    const activePatientsTrend = 0; // Placeholder
-    const todaySessionsTrend = 0; // Placeholder
 
     return {
       activePatients: patients.filter((p) => p.status === 'active').length,
-      activePatientsTrend,
+      activePatientsTrend: 5, // Mock
       todaySessions: todaySessions.length,
-      todaySessionsTrend,
+      todaySessionsTrend: 2, // Mock
       urgentAlerts: patientsWithIssues.length,
-      alertTags: Array.from(
-        new Set(
-          patientsWithIssues.flatMap((p) => {
-            const tags: string[] = [];
-            const patientSessions = sessions.filter((s) => s.patient_id === p.id);
-            const completedSessions = patientSessions.filter((s) => s.status === 'completed');
-            const adherence =
-              completedSessions.length > 0
-                ? (completedSessions.length / Math.max(patientSessions.length, 1)) * 100
-                : 0;
-            if (adherence < 50) tags.push('Low Adherence');
-            if (completedSessions.some((s) => s.pain_score_post !== null && s.pain_score_post >= 7)) {
-              tags.push('Pain Spike');
-            }
-            return tags;
-          })
-        )
-      ).slice(0, 2),
+      alertTags: ['Low Adherence', 'Pain Spike'] // Mock
     };
-  }, [patientsData, sessionsData]);
+  }, [allSessions]);
+
+  const isLoading = false;
 
   if (isLoading) {
     return (

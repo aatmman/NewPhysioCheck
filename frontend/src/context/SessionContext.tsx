@@ -29,7 +29,10 @@ interface SessionContextType {
 const SessionContext = createContext<SessionContextType | undefined>(undefined);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-    const [sessions, setSessions] = useState<Session[]>([]);
+    const [sessions, setSessions] = useState<Session[]>(() => {
+        const stored = localStorage.getItem('dummy_sessions');
+        return stored ? JSON.parse(stored) : [];
+    });
 
     const createSession = (input: {
         protocolId: string;
@@ -48,7 +51,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             createdAt: new Date().toISOString()
         };
 
-        setSessions(prev => [...prev, newSession]);
+        const updated = [...sessions, newSession];
+        setSessions(updated);
+        localStorage.setItem('dummy_sessions', JSON.stringify(updated));
         console.log('SESSION_CREATED', newSession);
         return newSession;
     };

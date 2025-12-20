@@ -1,32 +1,29 @@
-import { useQuery } from '@tanstack/react-query';
-import { patientService } from '@/lib/services/patientService';
-import { sessionService } from '@/lib/services/sessionService';
+import { useSession } from '@/context/SessionContext';
 import { Loader2, User } from 'lucide-react';
 import { useMemo } from 'react';
-import type { Patient, Session } from '@/types/api';
+// Dummy Patient Type (simplified)
+interface Patient {
+  id: string;
+  full_name: string;
+  condition?: string;
+  status: string;
+}
 
 export function PatientsAttention() {
-  // Fetch all patients
-  const { data: patientsData } = useQuery({
-    queryKey: ['patients', 'all'],
-    queryFn: () => patientService.getAll({ limit: 100 }),
-  });
+  const { sessions } = useSession();
 
-  // Fetch recent sessions to calculate adherence
-  const { data: sessionsData } = useQuery({
-    queryKey: ['sessions', 'recent'],
-    queryFn: () => sessionService.getAll({}),
-  });
-
-  const patients: Patient[] = patientsData?.data || [];
-  const sessions: Session[] = sessionsData?.data || [];
+  // DUMMY PATIENTS (Shared dummy data)
+  const patients: Patient[] = [
+    { id: 'patient-1', full_name: 'Demo Patient', status: 'active', condition: 'ACL Recovery' },
+    { id: 'patient-2', full_name: 'John Doe', status: 'active', condition: 'Shoulder Rehab' }
+  ];
 
   // Calculate patients needing attention based on adherence and recent pain scores
   const patientsNeedingAttention = useMemo(() => {
     return patients
       .map((patient) => {
         // Get sessions for this patient
-        const patientSessions = sessions.filter((s) => s.patient_id === patient.id);
+        const patientSessions = sessions.filter((s) => s.patientId === patient.id);
         const completedSessions = patientSessions.filter((s) => s.status === 'completed');
 
         // Calculate simple adherence: sessions completed vs expected (rough estimate)

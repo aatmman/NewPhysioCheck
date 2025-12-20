@@ -79,7 +79,10 @@ const DUMMY_EXERCISES: Exercise[] = [
 
 export function ProtocolProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
-    const [protocols, setProtocols] = useState<Protocol[]>([]);
+    const [protocols, setProtocols] = useState<Protocol[]>(() => {
+        const stored = localStorage.getItem('dummy_protocols');
+        return stored ? JSON.parse(stored) : [];
+    });
 
     const createProtocol = (input: { name: string; exercises: Omit<ProtocolExercise, 'id'>[] }) => {
         const newProtocol: Protocol = {
@@ -93,7 +96,9 @@ export function ProtocolProvider({ children }: { children: ReactNode }) {
             createdAt: new Date().toISOString()
         };
 
-        setProtocols(prev => [...prev, newProtocol]);
+        const updated = [...protocols, newProtocol];
+        setProtocols(updated);
+        localStorage.setItem('dummy_protocols', JSON.stringify(updated));
         console.log('PROTOCOL_CREATED', newProtocol);
         return newProtocol;
     };

@@ -1,16 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell } from 'recharts';
-import { sessionService } from '@/lib/services/sessionService';
+import { useSession } from '@/context/SessionContext';
 import { useMemo } from 'react';
-import type { Session } from '@/types/api';
 
 export function AdherenceChart() {
-  const { data: sessionsData } = useQuery({
-    queryKey: ['sessions', 'adherence'],
-    queryFn: () => sessionService.getAll({}),
-  });
-
-  const sessions: Session[] = sessionsData?.data || [];
+  const { sessions } = useSession();
 
   // Calculate adherence data grouped by week
   const adherenceData = useMemo(() => {
@@ -20,7 +13,12 @@ export function AdherenceChart() {
     const weekMap = new Map<string, { completed: number; total: number }>();
 
     sessions.forEach((session) => {
-      const date = new Date(session.started_at);
+      const dateStr = session.started_at || session.date || session.createdAt;
+      if (!dateStr) return;
+
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return;
+
       const weekStart = new Date(date);
       weekStart.setDate(date.getDate() - date.getDay());
       const weekKey = weekStart.toISOString().split('T')[0];
