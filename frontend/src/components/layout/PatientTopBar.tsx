@@ -1,6 +1,7 @@
 import { Bell, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { useMessages } from '@/context/MessageContext';
 import { useToast } from '@/hooks/use-toast';
 import {
   DropdownMenu,
@@ -9,8 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useQuery } from '@tanstack/react-query';
-import { messageService } from '@/lib/services/messageService';
 
 interface PatientTopBarProps {
   title: string;
@@ -21,17 +20,11 @@ export function PatientTopBar({ title, subtitle }: PatientTopBarProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { toast } = useToast();
+  const { getUnreadCount } = useMessages();
 
-  // Get unread messages count with polling for notifications
-  const { data: messagesData } = useQuery({
-    queryKey: ['messages', 'patient-unread-count'],
-    queryFn: () => messageService.getAll({ limit: 200 }),
-    enabled: !!user,
-    refetchInterval: 30000, // Poll every 30 seconds for new messages
-    refetchOnWindowFocus: true, // Refetch when window regains focus
-  });
-
-  const unreadCount = messagesData?.data?.filter((m) => m.to_user === user?.id && !m.read_at).length || 0;
+  // Get unread messages count from context
+  // The doctor we care about in this hackathon is 'doctor-1'
+  const unreadCount = getUnreadCount('doctor-1');
 
   const handleNotifications = () => {
     navigate('/patient/messages');
@@ -41,9 +34,9 @@ export function PatientTopBar({ title, subtitle }: PatientTopBarProps) {
     navigate('/patient/settings');
   };
 
-  const handleLogout = () => { // Removed async
-    logout(); // Changed await signOut() to logout()
-    toast({ // Added toast notification
+  const handleLogout = () => {
+    logout();
+    toast({
       title: 'Logged out',
       description: 'You have been successfully logged out',
     });

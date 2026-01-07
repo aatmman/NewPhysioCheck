@@ -146,7 +146,7 @@ export function ScheduleSessionDialog({ open, onOpenChange, patientId: initialPa
               </option>
               {assignedProtocols.map((protocol) => (
                 <option key={protocol.id} value={protocol.id}>
-                  {protocol.name}
+                  {protocol.title}
                 </option>
               ))}
             </select>

@@ -25,7 +25,7 @@ export default function PatientSessions() {
 
   // Filter sessions for current patient
   const sessionsData = useMemo(() => {
-    return allSessions.filter(s => s.patientId === user?.id);
+    return allSessions.filter(s => s.patient_id === user?.id);
   }, [allSessions, user?.id]);
 
   const isLoading = false;
@@ -178,8 +178,8 @@ export default function PatientSessions() {
                   <div key={session.id} className="bg-secondary/30 rounded-lg p-3 border border-border">
                     <div className="flex items-start justify-between mb-2">
                       <div>
-                        <p className="text-sm font-medium text-foreground">{formatDate(session.started_at)}</p>
-                        <p className="text-xs text-muted-foreground">{formatTime(session.started_at)}</p>
+                        <p className="text-sm font-medium text-foreground">{formatDate(session.scheduled_date || (session.started_at ? session.started_at.split('T')[0] : ''))}</p>
+                        <p className="text-xs text-muted-foreground">{session.started_at ? formatTime(session.started_at) : 'Scheduled'}</p>
                       </div>
                       <span
                         className={`pill text-[10px] ${session.status === 'completed'
@@ -296,7 +296,7 @@ export default function PatientSessions() {
                     {protocolMap.get(selectedSession.protocol_id)?.title || 'Unknown Protocol'}
                   </h3>
                   <p className="text-xs md:text-sm text-muted-foreground">
-                    {formatDate(selectedSession.started_at)} at {formatTime(selectedSession.started_at)}
+                    {formatDate(selectedSession.scheduled_date || (selectedSession.started_at ? selectedSession.started_at.split('T')[0] : ''))} at {selectedSession.started_at ? formatTime(selectedSession.started_at) : 'Scheduled'}
                   </p>
                 </div>
                 <span

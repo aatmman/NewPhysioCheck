@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { useAuth } from '@/context/AuthContext';
 import { useSession } from '@/context/SessionContext';
 import { useProtocol } from '@/context/ProtocolContext';
+import { useMessages } from '@/context/MessageContext';
 import { useMemo } from 'react';
 import type { Session, Protocol, Message, Assignment } from '@/types/api';
 
@@ -54,6 +55,7 @@ export default function PatientHome() {
   const queryClient = useQueryClient();
   const { sessions: allSessions, updateSession } = useSession();
   const { protocols: allProtocols } = useProtocol();
+  const { messages } = useMessages();
 
   // Filter sessions for this patient
   const sessions = useMemo(() => {
@@ -72,7 +74,6 @@ export default function PatientHome() {
   const protocols = allProtocols;
   const sessionsLoading = false; // Sync data
   const assignments: Assignment[] = []; // No assignment context yet, ignore for now or infer
-  const messages: Message[] = []; // No message context yet
 
   // Find today's session (scheduled for today or in progress)
   // Priority: in_progress > scheduled (for today) > completed (today)

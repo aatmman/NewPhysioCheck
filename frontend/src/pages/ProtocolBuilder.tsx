@@ -162,13 +162,15 @@ const ProtocolBuilder = () => {
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             {filteredExercises.map((exercise) => (
               <div key={exercise.id} className="exercise-card group">
-                <div className="relative aspect-[4/3] overflow-hidden bg-secondary">
+                <div className="relative aspect-square overflow-hidden bg-secondary/30 flex items-center justify-center p-4">
                   {exercise.image_url ? (
-                    <img
-                      src={exercise.image_url}
-                      alt={exercise.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
+                    <div className="w-full h-full rounded-full overflow-hidden border-2 border-primary/20 bg-background/50">
+                      <img
+                        src={exercise.image_url}
+                        alt={exercise.name}
+                        className="w-full h-full object-cover scale-[1.55] translate-y-[2%] group-hover:scale-[1.65] transition-transform duration-500"
+                      />
+                    </div>
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-muted-foreground">
                       <span className="text-sm">No Image</span>

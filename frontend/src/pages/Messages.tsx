@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MainLayout } from '@/components/layout/MainLayout';
-import { messageService } from '@/lib/services/messageService';
-import { patientService } from '@/lib/services/patientService';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useMessages } from '@/context/MessageContext';
 import { Search, Send, Loader2, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import type { Message, Patient } from '@/types/api';
+import { patientService } from '@/lib/services/patientService';
+import { useQuery } from '@tanstack/react-query';
+import { MainLayout } from '@/components/layout/MainLayout';
 
 const formatMessageTime = (dateString: string) => {
   const date = new Date(dateString);
@@ -39,68 +39,52 @@ const formatMessageDate = (dateString: string) => {
 const Messages = () => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { messages, sendMessage, getConversation, markAsRead } = useMessages();
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Get all messages to build conversation list
-  const { data: messagesData, isLoading: messagesLoading } = useQuery({
-    queryKey: ['messages', 'all'],
-    queryFn: () => messageService.getAll({ limit: 200 }),
-  });
-
-  // Get patients for conversation list
+  // Still get patients for conversation list (mock service is fine)
   const { data: patientsData, isLoading: patientsLoading } = useQuery({
     queryKey: ['patients', 'for-messages'],
     queryFn: () => patientService.getAll({ limit: 100 }),
   });
 
-  // Get conversation with selected patient
-  const { data: conversationData, isLoading: conversationLoading } = useQuery({
-    queryKey: ['messages', 'conversation', selectedPatientId],
-    queryFn: () =>
-      selectedPatientId
-        ? messageService.getAll({ conversation_with: selectedPatientId, limit: 100 })
-        : Promise.resolve({ data: [], total: 0 }),
-    enabled: !!selectedPatientId,
-  });
+  // Get conversation with selected patient from context (Oldest to Newest)
+  const selectedConversation = useMemo(() => {
+    return selectedPatientId ? getConversation(selectedPatientId).slice().reverse() : [];
+  }, [selectedPatientId, messages, getConversation]);
 
-  // Send message mutation
-  const sendMessageMutation = useMutation({
-    mutationFn: (text: string) => {
-      if (!selectedPatientId) throw new Error('No patient selected');
-      return messageService.send({ to_user: selectedPatientId, text });
-    },
-    onSuccess: () => {
-      setNewMessage('');
-      queryClient.invalidateQueries({ queryKey: ['messages'] });
-      toast({
-        title: 'Message sent',
-        description: 'Your message has been sent successfully.',
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to send message',
-        variant: 'destructive',
-      });
-    },
-  });
+  // Mark as read when messages change or patient selected
+  useEffect(() => {
+    if (selectedPatientId) {
+      markAsRead(selectedPatientId);
+    }
+  }, [selectedPatientId, messages, markAsRead]);
 
   // Build conversation list from messages and patients
-  const conversations = React.useMemo(() => {
-    if (!patientsData?.data || patientsLoading) return [];
+  const conversations = useMemo(() => {
+    let patients = patientsData?.data || [];
 
-    const patients = patientsData.data || [];
-    const messages = messagesData?.data || [];
+    // Always add the demo patient if not present in the fetched data for hackathon
+    if (!patients.find(p => p.id === 'patient-1')) {
+      patients = [...patients, {
+        id: 'patient-1',
+        full_name: 'Demo Patient',
+        condition: 'Post-op Knee Rehab',
+        status: 'active',
+        doctor_id: 'doctor-1',
+        created_at: new Date().toISOString()
+      } as Patient];
+    }
+
+    const allMessagesList = messages;
 
     // Group messages by other user (patient)
     const conversationMap = new Map<string, { lastMessage: Message; unread: boolean }>();
 
-    messages.forEach((msg) => {
+    allMessagesList.forEach((msg) => {
       // For doctor, get messages where doctor is sender or receiver
       const otherUserId = msg.from_user === user?.id ? msg.to_user : msg.from_user;
       const existing = conversationMap.get(otherUserId);
@@ -115,16 +99,16 @@ const Messages = () => {
 
     // Create conversation entries for all patients (with messages if they exist)
     const conversationList = patients.map((patient) => {
-      const conversationData = conversationMap.get(patient.id);
+      const data = conversationMap.get(patient.id);
 
-      if (conversationData) {
+      if (data) {
         // Patient has messages
         return {
           patientId: patient.id,
           patient,
-          lastMessage: conversationData.lastMessage,
-          unread: conversationData.unread,
-          lastMessageTime: formatMessageTime(conversationData.lastMessage.created_at),
+          lastMessage: data.lastMessage,
+          unread: data.unread,
+          lastMessageTime: formatMessageTime(data.lastMessage.created_at),
         };
       } else {
         // Patient has no messages yet
@@ -147,7 +131,7 @@ const Messages = () => {
       if (b.lastMessage) return 1;
       return a.patient.full_name.localeCompare(b.patient.full_name);
     });
-  }, [messagesData, patientsData, user?.id]);
+  }, [messages, patientsData, patientsLoading, user?.id]);
 
   // Filter conversations by search
   const filteredConversations = conversations.filter((conv) =>
@@ -155,7 +139,6 @@ const Messages = () => {
   );
 
   // Get selected conversation data
-  const selectedConversation = conversationData?.data || [];
   const selectedPatient = filteredConversations.find((c) => c.patientId === selectedPatientId)?.patient;
 
   // Auto-select first conversation
@@ -165,18 +148,21 @@ const Messages = () => {
     }
   }, [filteredConversations, selectedPatientId]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom only when a new message is added
+  const prevMessageCount = useRef(selectedConversation.length);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (selectedConversation.length > prevMessageCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMessageCount.current = selectedConversation.length;
   }, [selectedConversation]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !selectedPatientId) return;
-    sendMessageMutation.mutate(newMessage.trim());
+    sendMessage(selectedPatientId, newMessage.trim());
+    setNewMessage('');
   };
-
-
 
   return (
     <MainLayout title="Messages">
@@ -199,14 +185,9 @@ const Messages = () => {
 
           {/* Conversations */}
           <div className="flex-1 overflow-y-auto scrollbar-thin">
-            {messagesLoading || patientsLoading ? (
+            {filteredConversations.length === 0 && patientsLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="w-6 h-6 animate-spin text-primary" />
-              </div>
-            ) : !patientsData?.data || patientsData.data.length === 0 ? (
-              <div className="p-4 text-center text-muted-foreground">
-                <p>No patients found.</p>
-                <p className="text-xs mt-2">Create a patient to start messaging.</p>
               </div>
             ) : filteredConversations.length === 0 ? (
               <div className="p-4 text-center text-muted-foreground">
@@ -270,20 +251,14 @@ const Messages = () => {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-4">
-                {conversationLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                  </div>
-                ) : selectedConversation.length === 0 ? (
+              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-6 space-y-4 pb-12">
+                {selectedConversation.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     No messages yet. Start the conversation!
                   </div>
                 ) : (
                   <>
                     {selectedConversation
-                      .slice()
-                      .reverse()
                       .map((msg, index, arr) => {
                         const prevMsg = index > 0 ? arr[index - 1] : null;
                         const showDate =
@@ -305,26 +280,30 @@ const Messages = () => {
                             )}
 
                             <div
-                              className={`flex items-end gap-3 ${isFromCurrentUser ? 'flex-row-reverse' : ''}`}
+                              className={`flex ${isFromCurrentUser ? 'justify-end' : 'justify-start'}`}
                             >
-                              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                                <User className="w-5 h-5 text-primary" />
-                              </div>
-                              <div className={isFromCurrentUser ? 'text-right' : ''}>
-                                <div
-                                  className={`message-bubble ${isFromCurrentUser
+                              <div
+                                className={`flex gap-2 max-w-[85%] ${isFromCurrentUser ? 'flex-row-reverse' : ''}`}
+                              >
+                                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                                  <User className="w-4 h-4 md:w-5 md:h-5 text-primary" />
+                                </div>
+                                <div className={`min-w-0 flex flex-col ${isFromCurrentUser ? 'items-end' : 'items-start'}`}>
+                                  <div
+                                    className={`message-bubble ${isFromCurrentUser
                                       ? 'message-bubble-outgoing'
                                       : 'message-bubble-incoming'
-                                    }`}
-                                >
-                                  {msg.text}
+                                      } w-fit max-w-full`}
+                                  >
+                                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                                  </div>
+                                  <span className={`text-xs text-muted-foreground mt-1 block ${isFromCurrentUser ? 'text-right' : 'text-left'}`}>
+                                    {new Date(msg.created_at).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
                                 </div>
-                                <span className="text-xs text-muted-foreground mt-1 block">
-                                  {new Date(msg.created_at).toLocaleTimeString([], {
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })}
-                                </span>
                               </div>
                             </div>
                           </div>
@@ -344,19 +323,21 @@ const Messages = () => {
                       placeholder="Type your message here..."
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage(e as any);
+                        }
+                      }}
                       className="w-full px-4 py-3 bg-card border border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
                   <Button
                     type="submit"
-                    disabled={!newMessage.trim() || sendMessageMutation.isPending}
+                    disabled={!newMessage.trim()}
                     className="w-12 h-12 p-0"
                   >
-                    {sendMessageMutation.isPending ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Send className="w-5 h-5" />
-                    )}
+                    <Send className="w-5 h-5" />
                   </Button>
                 </form>
               </div>

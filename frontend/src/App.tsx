@@ -57,13 +57,13 @@ const App = () => (
       <Toaster />
       <Sonner />
       <Routes>
-        {/* Root route - redirects based on selected role or shows picker */}
+
         <Route path="/" element={<RootRedirect />} />
 
-        {/* Role picker (replaces auth) */}
+  
         <Route path="/login" element={<Login />} />
 
-        {/* Doctor/Admin routes */}
+
         <Route path="/dashboard" element={<Index />} />
         <Route path="/patients" element={<Patients />} />
         <Route path="/patients/:id" element={<PatientDetail />} />
@@ -73,7 +73,6 @@ const App = () => (
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/settings" element={<Settings />} />
 
-        {/* Patient routes */}
         <Route path="/patient/home" element={<PatientHome />} />
         <Route path="/patient/sessions" element={<PatientSessions />} />
         <Route path="/patient/session/active" element={<PatientSessionActive />} />

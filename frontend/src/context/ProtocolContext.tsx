@@ -2,6 +2,10 @@ import { createContext, useContext, useState, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import type { Protocol, ProtocolStep, Exercise } from '@/types/api';
 
+import StraightLegRaiseImg from '@/assets/images/StraightLegRaise.png';
+import SquatImg from '@/assets/images/Squat.png';
+import ElbowFlexionImg from '@/assets/images/ElbowFlexion.png';
+
 // Re-export Exercise from api.ts effectively by using it
 export { type Exercise };
 
@@ -22,7 +26,7 @@ const DUMMY_EXERCISES: Exercise[] = [
         joint: 'Knee',
         difficulty: 'Beginner',
         position: 'Supine',
-        image_url: 'https://images.unsplash.com/photo-1599058945522-28d584b6f0ff?w=800&auto=format&fit=crop&q=60', // Placeholder
+        image_url: StraightLegRaiseImg,
         created_at: new Date().toISOString(),
         normal_range_min: null,
         normal_range_max: null,
@@ -35,7 +39,7 @@ const DUMMY_EXERCISES: Exercise[] = [
         joint: 'Hip/Knee',
         difficulty: 'Intermediate',
         position: 'Standing',
-        image_url: 'https://images.unsplash.com/photo-1574680096141-1cddd32e01f9?w=800&auto=format&fit=crop&q=60',
+        image_url: SquatImg,
         created_at: new Date().toISOString(),
         normal_range_min: null,
         normal_range_max: null,
@@ -48,7 +52,7 @@ const DUMMY_EXERCISES: Exercise[] = [
         joint: 'Elbow',
         difficulty: 'Beginner',
         position: 'Sitting',
-        image_url: 'https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=800&auto=format&fit=crop&q=60',
+        image_url: ElbowFlexionImg,
         created_at: new Date().toISOString(),
         normal_range_min: null,
         normal_range_max: null,

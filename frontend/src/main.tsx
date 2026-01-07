@@ -4,6 +4,7 @@ import App from "./App.tsx";
 import { AuthProvider } from "./context/AuthContext";
 import { ProtocolProvider } from "./context/ProtocolContext";
 import { SessionProvider } from "./context/SessionContext";
+import { MessageProvider } from "./context/MessageContext";
 import "./index.css";
 
 // Note: We keep auth data in localStorage so users stay logged in
@@ -13,14 +14,16 @@ createRoot(document.getElementById("root")!).render(
   <AuthProvider>
     <ProtocolProvider>
       <SessionProvider>
-        <BrowserRouter
-          future={{
-            v7_startTransition: true,
-            v7_relativeSplatPath: true,
-          }}
-        >
-          <App />
-        </BrowserRouter>
+        <MessageProvider>
+          <BrowserRouter
+            future={{
+              v7_startTransition: true,
+              v7_relativeSplatPath: true,
+            }}
+          >
+            <App />
+          </BrowserRouter>
+        </MessageProvider>
       </SessionProvider>
     </ProtocolProvider>
   </AuthProvider>

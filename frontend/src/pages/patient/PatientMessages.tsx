@@ -1,127 +1,52 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useAuth } from '@/context/AuthContext';
+import { useMessages } from '@/context/MessageContext';
 import { Search, Send, ArrowLeft, Loader2, User, MessageSquare } from 'lucide-react';
 import { PatientLayout } from '@/components/layout/PatientLayout';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useAuth } from '@/context/AuthContext';
-import { messageService } from '@/lib/services/messageService';
-import { sessionService } from '@/lib/services/sessionService';
 import { useToast } from '@/hooks/use-toast';
-import type { Message } from '@/types/api';
 
 export default function PatientMessages() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { messages, sendMessage, getConversation, markAsRead } = useMessages();
   const [newMessage, setNewMessage] = useState('');
   const [showChat, setShowChat] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Get doctor ID from messages (find a message where current user is receiver)
-  const { data: messagesData, isLoading } = useQuery({
-    queryKey: ['messages', 'patient'],
-    queryFn: () => messageService.getAll({ limit: 200 }),
-  });
+  // For hackathon: patients are assigned to 'doctor-1' by default
+  const doctorId = 'doctor-1';
 
-  const messages: Message[] = messagesData?.data || [];
+  const conversationView = useMemo(() => {
+    return getConversation(doctorId);
+  }, [doctorId, messages, getConversation]);
 
-  // Get sessions to find doctor_id from assignments
-  const { data: sessionsData } = useQuery({
-    queryKey: ['sessions', 'patient-doctor-lookup'],
-    queryFn: () => sessionService.getAll({}),
-    enabled: !!user?.id,
-  });
+  // Mark as read when messages change
+  useEffect(() => {
+    markAsRead(doctorId);
+  }, [messages, markAsRead, doctorId]);
 
-  // Find doctor ID from messages
-  // For hackathon: patients can find their doctor from messages they received
-  const doctorId = useMemo(() => {
-    if (!user?.id) return null;
-    
-    // Find doctor from messages (doctor who sent messages to this patient)
-    if (messages.length > 0) {
-      // First: check messages received from doctor
-      const receivedFromDoctor = messages.find((m) => m.to_user === user.id);
-      if (receivedFromDoctor?.from_user) return receivedFromDoctor.from_user;
-      
-      // Second: check messages sent to doctor
-      const sentToDoctor = messages.find((m) => m.from_user === user.id);
-      if (sentToDoctor?.to_user) return sentToDoctor.to_user;
+  // Auto-scroll to bottom only when a new message is added
+  const prevMessageCount = useRef(conversationView.length);
+  useEffect(() => {
+    if (conversationView.length > prevMessageCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-    
-    // Fallback: user metadata (if stored during login/assignment)
-    if (user.user_metadata?.doctor_id) {
-      return user.user_metadata.doctor_id as string;
-    }
-    
-    return null;
-  }, [messages, user?.id, user?.user_metadata]);
-
-  // Get all messages to find any available doctor (for hackathon - start chat feature)
-  const { data: allMessagesData } = useQuery({
-    queryKey: ['messages', 'all-for-doctor-lookup'],
-    queryFn: () => messageService.getAll({ limit: 500 }),
-    enabled: !doctorId, // Only fetch if we don't have a doctor yet
-  });
-
-  // Find any doctor ID from all messages (for "Start Chat" feature)
-  const availableDoctorId = useMemo(() => {
-    if (doctorId || !allMessagesData?.data) return null;
-    // Find any unique user ID who sent messages (likely a doctor)
-    const uniqueUserIds = new Set<string>();
-    allMessagesData.data.forEach(msg => {
-      if (msg.from_user !== user?.id && msg.to_user !== user?.id) {
-        uniqueUserIds.add(msg.from_user);
-      }
-    });
-    // Return first doctor ID found (for hackathon demo)
-    return Array.from(uniqueUserIds)[0] || null;
-  }, [allMessagesData?.data, user?.id, doctorId]);
-
-  // Get conversation with doctor
-  const { data: conversationData, isLoading: conversationLoading } = useQuery({
-    queryKey: ['messages', 'conversation', doctorId],
-    queryFn: () =>
-      doctorId
-        ? messageService.getAll({ conversation_with: doctorId, limit: 100 })
-        : Promise.resolve({ data: [], total: 0 }),
-    enabled: !!doctorId,
-  });
-
-  // Send message mutation
-  const sendMessageMutation = useMutation({
-    mutationFn: (text: string) => {
-      if (!doctorId) throw new Error('No doctor found');
-      return messageService.send({ to_user: doctorId, text });
-    },
-    onSuccess: () => {
-      setNewMessage('');
-      queryClient.invalidateQueries({ queryKey: ['messages'] });
-      toast({
-        title: 'Message sent',
-        description: 'Your message has been sent successfully.',
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to send message',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  const conversation = conversationData?.data || [];
+    prevMessageCount.current = conversationView.length;
+  }, [conversationView]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !doctorId) return;
-    sendMessageMutation.mutate(newMessage.trim());
+    sendMessage(doctorId, newMessage.trim());
+    setNewMessage('');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage(e);
+      handleSendMessage(e as any);
     }
   };
 
@@ -150,63 +75,6 @@ export default function PatientMessages() {
       return '';
     }
   };
-
-  // Start chat mutation - sends first message to doctor
-  const startChatMutation = useMutation({
-    mutationFn: async (doctorIdToUse: string) => {
-      return messageService.send({
-        to_user: doctorIdToUse,
-        text: 'Hello, I would like to start a conversation with you.',
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['messages'] });
-      queryClient.invalidateQueries({ queryKey: ['messages', 'all-for-doctor-lookup'] });
-      toast({
-        title: 'Message sent',
-        description: 'Your message has been sent. You can now chat with your doctor.',
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to send message',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  if (isLoading || conversationLoading) {
-    return (
-      <PatientLayout title="Messages" subtitle="Chat with your physiotherapist">
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        </div>
-      </PatientLayout>
-    );
-  }
-
-  // Show start chat option if no doctor but we can find one from messages
-  if (!doctorId && availableDoctorId) {
-    return (
-      <PatientLayout title="Messages" subtitle="Chat with your physiotherapist">
-        <div className="text-center py-12 space-y-4">
-          <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto" />
-          <p className="text-muted-foreground">No conversation started yet.</p>
-          <p className="text-sm text-muted-foreground">
-            Start a conversation with your assigned doctor.
-          </p>
-          <Button
-            onClick={() => startChatMutation.mutate(availableDoctorId)}
-            disabled={startChatMutation.isPending}
-            className="mt-4"
-          >
-            {startChatMutation.isPending ? 'Starting...' : 'Start Chat with Doctor'}
-          </Button>
-        </div>
-      </PatientLayout>
-    );
-  }
 
   if (!doctorId) {
     return (
@@ -249,16 +117,16 @@ export default function PatientMessages() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
                     <h4 className="font-medium text-foreground text-sm md:text-base truncate">Your Doctor</h4>
-                    {conversation.length > 0 && (
+                    {conversationView.length > 0 && (
                       <span className="text-[10px] md:text-xs text-muted-foreground flex-shrink-0">
-                        {formatMessageTime(conversation[0].created_at)}
+                        {formatMessageTime(conversationView[0].created_at)}
                       </span>
                     )}
                   </div>
-                  {conversation.length > 0 && (
+                  {conversationView.length > 0 && (
                     <p className="text-xs md:text-sm text-muted-foreground truncate">
-                      {conversation[0].from_user === user?.id ? 'You: ' : ''}
-                      {conversation[0].text}
+                      {conversationView[0].from_user === user?.id ? 'You: ' : ''}
+                      {conversationView[0].text}
                     </p>
                   )}
                   <span className="text-[10px] md:text-xs text-primary">Your Physiotherapist</span>
@@ -290,13 +158,13 @@ export default function PatientMessages() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto scrollbar-thin py-3 md:py-4 space-y-3 md:space-y-4">
-            {conversation.length === 0 ? (
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin py-3 md:py-4 space-y-3 md:space-y-4 pb-8 md:pb-12">
+            {conversationView.length === 0 ? (
               <div className="text-center text-muted-foreground py-8">
                 <p>No messages yet. Start the conversation!</p>
               </div>
             ) : (
-              conversation
+              conversationView
                 .slice()
                 .reverse()
                 .map((message, idx, arr) => {
@@ -327,18 +195,14 @@ export default function PatientMessages() {
                               <User className="w-3 h-3 md:w-4 md:h-4 text-primary" />
                             </div>
                           )}
-                          <div className="min-w-0">
+                          <div className={`min-w-0 flex flex-col ${isFromCurrentUser ? 'items-end' : 'items-start'}`}>
                             <div
-                              className={`message-bubble ${
-                                isFromCurrentUser ? 'message-bubble-outgoing' : 'message-bubble-incoming'
-                              }`}
+                              className={`message-bubble ${isFromCurrentUser ? 'message-bubble-outgoing' : 'message-bubble-incoming'} w-fit max-w-full`}
                             >
-                              <p className="text-xs md:text-sm break-words">{message.text}</p>
+                              <p className="text-xs md:text-sm break-words whitespace-pre-wrap">{message.text}</p>
                             </div>
                             <p
-                              className={`text-[10px] md:text-xs text-muted-foreground mt-1 ${
-                                isFromCurrentUser ? 'text-right' : ''
-                              }`}
+                              className={`text-[10px] md:text-xs text-muted-foreground mt-1 ${isFromCurrentUser ? 'text-right' : 'text-left'}`}
                             >
                               {formatMessageTime(message.created_at)}
                             </p>
@@ -349,6 +213,7 @@ export default function PatientMessages() {
                   );
                 })
             )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Message input */}
@@ -360,19 +225,14 @@ export default function PatientMessages() {
                 onChange={(e) => setNewMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
                 className="flex-1 text-sm"
-                disabled={sendMessageMutation.isPending}
               />
               <Button
                 type="submit"
                 size="icon"
-                disabled={!newMessage.trim() || sendMessageMutation.isPending}
+                disabled={!newMessage.trim()}
                 className="flex-shrink-0 h-8 w-8 md:h-10 md:w-10"
               >
-                {sendMessageMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 md:w-5 md:h-5 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4 md:w-5 md:h-5" />
-                )}
+                <Send className="w-4 h-4 md:w-5 md:h-5" />
               </Button>
             </form>
           </div>

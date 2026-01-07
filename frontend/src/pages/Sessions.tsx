@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useSession } from '@/context/SessionContext';
+import { useProtocol } from '@/context/ProtocolContext';
 import { ScheduleSessionDialog } from '@/components/doctor/ScheduleSessionDialog';
 import { ChevronLeft, ChevronRight, Loader2, User, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import type { Session } from '@/context/SessionContext';
+import type { Session } from '@/types/api';
 
 const Sessions = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -34,11 +35,17 @@ const Sessions = () => {
 
   // Fetch sessions from Context (Dummy Data)
   const { sessions: allSessions } = useSession();
+  const { protocols } = useProtocol();
+
+  const getProtocolName = (protocolId: string) => {
+    const protocol = protocols.find(p => p.id === protocolId);
+    return protocol ? protocol.title : 'Session';
+  };
 
   // Filter sessions (in a real app this would be an API call)
   const sessions = useMemo(() => {
     return allSessions.filter(s => {
-      const sDate = s.date || s.scheduled_date || (s.started_at ? s.started_at.split('T')[0] : '');
+      const sDate = s.scheduled_date || (s.started_at ? s.started_at.split('T')[0] : '');
       // Simple filter: include everything for now since we have limited dummy data
       // But strictly we should filter by current month
       return true;
@@ -209,9 +216,9 @@ const Sessions = () => {
                       <div
                         key={session.id}
                         className={`calendar-event ${getSessionStatusColor(session.status)}`}
-                        title={`${session.started_at ? formatTime(session.started_at) : 'Scheduled'} - ${session.status === 'scheduled' ? 'Scheduled' : 'Session'}`}
+                        title={`${session.started_at ? formatTime(session.started_at) : 'Scheduled'} - ${getProtocolName(session.protocol_id)}`}
                       >
-                        {session.status === 'scheduled' ? 'Scheduled' : (session.started_at ? formatTime(session.started_at) : 'Scheduled')}
+                        {getProtocolName(session.protocol_id)}
                       </div>
                     ))}
                     {daySessions.length > 3 && (
@@ -275,7 +282,7 @@ const Sessions = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">
-                          Session
+                          {getProtocolName(session.protocol_id)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {session.status === 'scheduled'
