@@ -114,6 +114,13 @@ export async function seedDemoData(): Promise<{ success: boolean; message: strin
                 email: 'patient2@demo.physiocheck.com',
                 role: 'patient',
                 avatar_url: null
+            },
+            {
+                id: 'demo-patient-003',
+                name: 'Michael Brown',
+                email: 'patient3@demo.physiocheck.com',
+                role: 'patient',
+                avatar_url: null
             }
         ];
 
@@ -130,7 +137,8 @@ export async function seedDemoData(): Promise<{ success: boolean; message: strin
         // Create doctor-patient relationships
         const doctorPatients = [
             { doctor_id: 'demo-doctor-001', patient_id: 'demo-patient-001' },
-            { doctor_id: 'demo-doctor-001', patient_id: 'demo-patient-002' }
+            { doctor_id: 'demo-doctor-001', patient_id: 'demo-patient-002' },
+            { doctor_id: 'demo-doctor-001', patient_id: 'demo-patient-003' }
         ];
 
         const { error: relError } = await supabase
