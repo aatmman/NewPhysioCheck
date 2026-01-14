@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -10,7 +12,39 @@ import {
   seedDemoData,
   DemoUser
 } from '@/lib/demoAuth';
-import { Loader2, UserCircle, Stethoscope, Users, Database, AlertCircle, CheckCircle } from 'lucide-react';
+import { Loader2, Stethoscope, Database, AlertCircle, User, Lock, ArrowRight } from 'lucide-react';
+
+// Demo credentials mapping
+const DEMO_CREDENTIALS = [
+  {
+    username: 'doctor@demo.physiocheck.com',
+    password: 'demo123',
+    role: 'doctor' as const,
+    name: 'Dr. Sarah Chen',
+    description: 'View patient progress, create protocols, manage sessions'
+  },
+  {
+    username: 'patient1@demo.physiocheck.com',
+    password: 'demo123',
+    role: 'patient' as const,
+    name: 'John Smith',
+    description: 'Primary patient account'
+  },
+  {
+    username: 'patient2@demo.physiocheck.com',
+    password: 'demo123',
+    role: 'patient' as const,
+    name: 'Emily Johnson',
+    description: 'Secondary patient account'
+  },
+  {
+    username: 'patient3@demo.physiocheck.com',
+    password: 'demo123',
+    role: 'patient' as const,
+    name: 'Michael Brown',
+    description: 'Tertiary patient account'
+  }
+];
 
 export default function Login() {
   const navigate = useNavigate();
@@ -19,10 +53,14 @@ export default function Login() {
 
   const [demoUsers, setDemoUsers] = useState<DemoUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loggingIn, setLoggingIn] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [needsSeed, setNeedsSeed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Form state
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
 
   // Redirect if already logged in
   useEffect(() => {
@@ -97,22 +135,57 @@ export default function Login() {
     }
   };
 
-  const handleLogin = async (demoUser: DemoUser) => {
-    setLoggingIn(demoUser.id);
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    if (!username || !password) {
+      toast({
+        title: 'Missing Credentials',
+        description: 'Please enter both username and password',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setLoggingIn(true);
 
     try {
+      // Find matching demo user by email
+      const matchedUser = demoUsers.find(u => u.email.toLowerCase() === username.toLowerCase());
+
+      if (!matchedUser) {
+        toast({
+          title: 'Invalid Credentials',
+          description: 'User not found. Please check your username.',
+          variant: 'destructive',
+        });
+        setLoggingIn(false);
+        return;
+      }
+
+      // Check password (demo password is always 'demo123')
+      if (password !== 'demo123') {
+        toast({
+          title: 'Invalid Credentials',
+          description: 'Incorrect password. Try "demo123"',
+          variant: 'destructive',
+        });
+        setLoggingIn(false);
+        return;
+      }
+
       // Small delay for UX
       await new Promise(resolve => setTimeout(resolve, 300));
 
-      login(demoUser);
+      login(matchedUser);
 
       toast({
-        title: `Welcome, ${demoUser.name}!`,
-        description: `Logged in as ${demoUser.role}`,
+        title: `Welcome, ${matchedUser.name}!`,
+        description: `Logged in as ${matchedUser.role}`,
       });
 
       // Navigate based on role
-      navigate(demoUser.role === 'doctor' ? '/dashboard' : '/patient/home');
+      navigate(matchedUser.role === 'doctor' ? '/dashboard' : '/patient/home');
     } catch (e) {
       console.error('[Login] Error:', e);
       toast({
@@ -121,30 +194,18 @@ export default function Login() {
         variant: 'destructive',
       });
     } finally {
-      setLoggingIn(null);
+      setLoggingIn(false);
     }
   };
 
-  const getRoleIcon = (role: string) => {
-    return role === 'doctor' ? (
-      <Stethoscope className="w-8 h-8 text-primary" />
-    ) : (
-      <UserCircle className="w-8 h-8 text-primary" />
-    );
-  };
-
-  const getRoleDescription = (role: string, index: number) => {
-    if (role === 'doctor') {
-      return 'View patient progress, create protocols, manage sessions';
-    }
-    return index === 0
-      ? 'View assigned exercises, complete sessions, track progress'
-      : 'Secondary patient account for testing';
+  const fillCredentials = (cred: typeof DEMO_CREDENTIALS[0]) => {
+    setUsername(cred.username);
+    setPassword(cred.password);
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg space-y-6">
+      <div className="w-full max-w-md space-y-6">
         {/* Logo/Title */}
         <div className="text-center space-y-2">
           <div className="flex items-center justify-center gap-2 mb-4">
@@ -158,19 +219,19 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Main Card */}
+        {/* Main Login Card */}
         <Card className="border-2">
           <CardHeader className="text-center pb-4">
-            <CardTitle className="text-xl">Demo Login</CardTitle>
+            <CardTitle className="text-xl">Sign In</CardTitle>
             <CardDescription>
-              Select a demo account to explore the platform
+              Enter your credentials to access the platform
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-6">
             {loading ? (
               <div className="flex flex-col items-center justify-center py-8 gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Loading demo accounts...</p>
+                <p className="text-sm text-muted-foreground">Loading...</p>
               </div>
             ) : error && needsSeed ? (
               <div className="space-y-4">
@@ -229,42 +290,117 @@ export default function Login() {
                 </Button>
               </div>
             ) : (
-              <div className="space-y-3">
-                {demoUsers.map((demoUser, index) => (
-                  <Button
-                    key={demoUser.id}
-                    variant="outline"
-                    className="w-full h-auto p-4 flex items-start gap-4 hover:bg-primary/5 hover:border-primary/30 transition-all"
-                    onClick={() => handleLogin(demoUser)}
-                    disabled={loggingIn !== null}
-                  >
-                    <div className="shrink-0">
-                      {loggingIn === demoUser.id ? (
-                        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                      ) : (
-                        getRoleIcon(demoUser.role)
-                      )}
-                    </div>
-                    <div className="flex-1 text-left">
-                      <div className="font-semibold">{demoUser.name}</div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {getRoleDescription(demoUser.role, index)}
-                      </div>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${demoUser.role === 'doctor'
-                            ? 'bg-blue-500/10 text-blue-500'
-                            : 'bg-emerald-500/10 text-emerald-500'
-                          }`}>
-                          {demoUser.role === 'doctor' ? 'Doctor' : 'Patient'}
-                        </span>
-                      </div>
-                    </div>
-                  </Button>
-                ))}
-              </div>
+              <form onSubmit={handleLogin} className="space-y-4">
+                {/* Username Field */}
+                <div className="space-y-2">
+                  <Label htmlFor="username" className="text-sm font-medium">
+                    Email / Username
+                  </Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="username"
+                      type="email"
+                      placeholder="Enter your email"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="pl-10"
+                      disabled={loggingIn}
+                    />
+                  </div>
+                </div>
+
+                {/* Password Field */}
+                <div className="space-y-2">
+                  <Label htmlFor="password" className="text-sm font-medium">
+                    Password
+                  </Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="password"
+                      type="password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="pl-10"
+                      disabled={loggingIn}
+                    />
+                  </div>
+                </div>
+
+                {/* Login Button */}
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={loggingIn || !username || !password}
+                >
+                  {loggingIn ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Signing in...
+                    </>
+                  ) : (
+                    <>
+                      Sign In
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </>
+                  )}
+                </Button>
+              </form>
             )}
           </CardContent>
         </Card>
+
+        {/* Demo Credentials Card */}
+        {!loading && !needsSeed && (
+          <Card className="border border-border/50 bg-card/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Demo Credentials
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Click "Fill" to auto-fill login credentials
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {DEMO_CREDENTIALS.map((cred, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border/30 hover:bg-secondary/50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">{cred.name}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        cred.role === 'doctor'
+                          ? 'bg-blue-500/10 text-blue-400'
+                          : 'bg-emerald-500/10 text-emerald-400'
+                      }`}>
+                        {cred.role === 'doctor' ? 'Doctor' : 'Patient'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                      {cred.username}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-2 text-xs h-7 px-3 text-primary hover:text-primary hover:bg-primary/10"
+                    onClick={() => fillCredentials(cred)}
+                    disabled={loggingIn}
+                  >
+                    Fill
+                  </Button>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground text-center pt-2">
+                Password for all accounts: <code className="bg-secondary px-1.5 py-0.5 rounded">demo123</code>
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Footer */}
         <div className="text-center text-xs text-muted-foreground space-y-1">
